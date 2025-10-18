@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BizDoc — Analyze PDF</title>
+<style>
+  :root {
+    --bg: #0f172a;        /* slate-900 */
+    --panel: #111827;     /* gray-900 */
+    --text: #e5e7eb;      /* gray-200 */
+    --muted: #9ca3af;     /* gray-400 */
+    --accent: #2563eb;    /* blue-600 */
+    --accent-2: #1d4ed8;  /* blue-700 */
+    --border: #1f2937;    /* gray-800 */
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+  .container {
+    max-width: 980px;
+    margin: 36px auto;
+    padding: 24px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  h1 { font-size: 40px; margin: 0 0 12px; letter-spacing: .3px; }
+  p.lead { color: var(--muted); margin: 0 0 24px; }
+  label { display: block; font-weight: 700; margin: 18px 0 8px; }
+  input[type="file"] {
+    background: #0b1020;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  textarea {
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    background: #0b1020;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font: inherit;
+  }
+  .row { margin-top: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  button {
+    background: var(--accent);
+    color: white;
+    border: 0;
+    padding: 12px 18px;
+    border-radius: 10px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  button:hover { background: var(--accent-2); }
+  button[disabled] { opacity: .5; cursor: not-allowed; }
+  .status { color: var(--muted); min-height: 1lh; }
+  h2 { margin-top: 28px; }
+  pre {
+    background: #0b1020;
+    color: #cde3ff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  small.note { display:block; color: var(--muted); margin-top: 16px; }
+</style>
+
+<div class="container">
+  <h1>BizDoc — Analyze PDF</h1>
+  <p class="lead">Upload a <b>text-based</b> PDF (not scanned). Add optional instruction. Click <b>Analyze</b>, then <b>Download PDF</b>.</p>
+
+  <label for="file">PDF file</label>
+  <input id="file" type="file" accept="application/pdf,.pdf" />
+
+  <label for="instruction">Instruction (optional)</label>
+  <textarea id="instruction" placeholder="Executive summary + key findings + risks + one KPI bar chart"></textarea>
+
+  <div class="row">
+    <button id="analyze">Analyze</button>
+    <button id="download" disabled>Download PDF</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <h2>Analysis JSON</h2>
+  <pre id="out">{}</pre>
+
+  <small class="note">
+    Tips: serverless size/time limits apply. Scanned PDFs without text require OCR (not enabled in this build).
+  </small>
+</div>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const fileEl = $('#file');
+  const instructionEl = $('#instruction');
+  const analyzeBtn = $('#analyze');
+  const downloadBtn = $('#download');
+  const statusEl = $('#status');
+  const outEl = $('#out');
+
+  let lastFormData = null;     // we reuse the same payload for the download step
+  let lastFilenameBase = null; // used to propose a download filename
+
+  function baseName(name) {
+    if (!name) return 'analysis';
+    return name.replace(/\.pdf$/i, '') || 'analysis';
+  }
+
+  async function askAnalyze() {
+    const f = fileEl.files && fileEl.files[0];
+    if (!f) {
+      outEl.textContent = JSON.stringify({ ok:false, error:'Choose a PDF first.' }, null, 2);
+      return;
+    }
+
+    statusEl.textContent = 'Analyzing…';
+    analyzeBtn.disabled = true;
+    downloadBtn.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append('file', f, f.name);
+      const instruction = instructionEl.value.trim();
+      if (instruction) fd.append('instruction', instruction);
+
+      lastFormData = fd;
+      lastFilenameBase = baseName(f.name);
+
+      const r = await fetch('/api/process?debug=1', { method:'POST', body: fd });
+      const text = await r.text();
+      let body;
+      try { body = JSON.parse(text); } catch { body = { raw: text }; }
+
+      outEl.textContent = JSON.stringify({ status: r.status, ok: r.ok, body }, null, 2);
+      statusEl.textContent = r.ok ? 'Analysis ready.' : 'Failed.';
+
+      if (r.ok && body && (body.ok || body.analysis)) {
+        downloadBtn.disabled = false;
+      }
+    } catch (e) {
+      outEl.textContent = JSON.stringify({ ok:false, error: String(e) }, null, 2);
+      statusEl.textContent = 'Failed.';
+    } finally {
+      analyzeBtn.disabled = false;
+    }
+  }
+
+  async function askDownload() {
+    if (!lastFormData) {
+      outEl.textContent = JSON.stringify({ ok:false, error:'Analyze first.' }, null, 2);
+      return;
+    }
+    statusEl.textContent = 'Building PDF…';
+    downloadBtn.disabled = true;
+
+    try {
+      // clone the form so we don't mutate the one held in memory
+      const fd = new FormData();
+      for (const [k, v] of lastFormData.entries()) fd.append(k, v);
+      // You can pass an explicit filename if your API supports it:
+      fd.append('filename', `${lastFilenameBase || 'analysis'}.pdf`);
+
+      const r = await fetch('/api/process', { method:'POST', body: fd });
+      if (!r.ok) {
+        const tx = await r.text().catch(() => '');
+        let body;
+        try { body = JSON.parse(tx); } catch { body = { raw: tx }; }
+        outEl.textContent = JSON.stringify({ status: r.status, ok: false, body }, null, 2);
+        statusEl.textContent = 'Failed.';
+        return;
+      }
+
+      const blob = await r.blob();
+      const cd = r.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="([^"]+)"/i);
+      const fname = (m && m[1]) || `${lastFilenameBase || 'analysis'}.pdf`;
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      statusEl.textContent = 'PDF downloaded.';
+    } catch (e) {
+      outEl.textContent = JSON.stringify({ ok:false, error: String(e) }, null, 2);
+      statusEl.textContent = 'Failed.';
+    } finally {
+      downloadBtn.disabled = false;
+    }
+  }
+
+  analyzeBtn.addEventListener('click', askAnalyze);
+  downloadBtn.addEventListener('click', askDownload);
+</script>

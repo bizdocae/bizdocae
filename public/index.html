@@ -28,23 +28,16 @@
     .grid{display:grid;grid-template-columns:1fr;gap:16px}
     @media(min-width:800px){ .grid{grid-template-columns:1fr 1fr} }
     .footer{color:#666;font-size:12px;margin-top:10px}
-    .ok{color:#059669;font-weight:600}
-    .err{color:#b91c1c;font-weight:600}
   </style>
 </head>
 <body>
-  <header>
-    <div class="inner">
-      <div class="pill">BizDoc</div>
-      <h1>Analyzer & Downloads</h1>
-    </div>
-  </header>
-
+  <header><div class="inner"><div class="pill">BizDoc</div><h1>Analyzer & Downloads</h1></div></header>
   <main>
-    <!-- Upload & Preview -->
+
+    <!-- Upload -->
     <div class="card">
-      <h2 style="margin:0 0 8px">1) Upload document (optional)</h2>
-      <p class="footer">Accepted: <b>TXT</b>, <b>DOCX</b>, <b>PDF</b> (PDF text requires OCR to extract; otherwise a placeholder note is used).</p>
+      <h2>1) Upload document (optional)</h2>
+      <p class="footer">Accepted: <b>TXT</b>, <b>DOCX</b>, <b>PDF</b> (PDF text requires OCR to extract; otherwise a placeholder is used).</p>
       <div class="row">
         <input type="file" id="file" />
         <button class="btn secondary" id="btnUpload">Upload & Preview</button>
@@ -55,106 +48,98 @@
     <!-- Inputs -->
     <div class="grid">
       <div class="card">
-        <h2 style="margin:0 0 8px">2) Set filename & title</h2>
+        <h2>2) Set filename & title</h2>
         <label for="filename">Filename (no extension)</label>
-        <input id="filename" type="text" value="report" placeholder="e.g. report"/>
+        <input id="filename" type="text" value="report"/>
         <label for="title">Title</label>
         <input id="title" type="text" value="BizDoc Report"/>
-        <p class="footer">Filenames are sanitized automatically; extensions are added based on the chosen format.</p>
+        <p class="footer">Extensions are added automatically based on format.</p>
       </div>
 
       <div class="card">
-        <h2 style="margin:0 0 8px">3) Preview / Body</h2>
+        <h2>3) Preview / Body</h2>
         <label for="body">Body text</label>
         <textarea id="body">Hello from BizDoc.</textarea>
         <div class="footer" id="detectedHint"><small class="muted">Tip: Upload a file to auto-fill this area.</small></div>
       </div>
     </div>
 
-    <!-- Actions -->
+    <!-- Downloads -->
     <div class="card">
-      <h2 style="margin:0 0 8px">4) Download</h2>
+      <h2>4) Download</h2>
       <div class="row">
         <button class="btn" id="btnTxt">Download TXT</button>
         <button class="btn info" id="btnDocx">Download DOCX</button>
         <button class="btn warn" id="btnPdf">Download PDF</button>
       </div>
-      <p class="footer">Downloads are generated via <code>/api/download-get</code> with CORS enabled.</p>
+      <p class="footer">Generated via <code>/api/download-get</code> (CORS enabled, no-store).</p>
     </div>
 
-    <p class="footer">Runtime: serverless (Node 20 LTS) · Privacy: <code>Cache-Control: no-store</code> for downloads.</p>
+    <!-- ANALYSIS -->
+    <div class="card">
+      <h2>5) AI Analysis</h2>
+      <label for="instruction">Instruction (optional)</label>
+      <input id="instruction" type="text" value="Executive summary + key findings + risks + one KPI bar chart"/>
+      <div class="row">
+        <button class="btn secondary" id="btnAnalyze">Analyze</button>
+        <button class="btn warn" id="btnDownloadFromAnalysis" disabled>Download PDF (from analysis)</button>
+      </div>
+      <p class="footer">Analysis JSON</p>
+      <textarea id="analysisJson">{}</textarea>
+    </div>
+
+    <p class="footer">Runtime: Node 20 LTS · Downloads: <code>Cache-Control: no-store</code></p>
   </main>
 
   <script>
-    const APP = 'https://bizdoc-min.vercel.app'; // change if your base URL differs
+    const APP = 'https://bizdoc-min.vercel.app'; // change if different
     const el = s => document.querySelector(s);
     const show = (n, yes) => el(n).classList.toggle('hidden', !yes);
+    const analysisState = { json: null };
 
     async function postAndDownload(payload) {
-      const res = await fetch(`${APP}/api/download-get`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        alert('Failed: ' + await res.text());
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = payload.filename;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+      const r = await fetch(`${APP}/api/download-get`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      if (!r.ok) { alert('Failed: '+await r.text()); return; }
+      const b = await r.blob(); const url = URL.createObjectURL(b);
+      const a = document.createElement('a'); a.href = url; a.download = payload.filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     }
+    function vals(){ const base=(el('#filename').value||'report').trim(); const title=el('#title').value||'BizDoc Report'; const body=el('#body').value||''; return {base,title,body}; }
 
-    function vals() {
-      const base = (el('#filename').value || 'report').trim();
-      const title = el('#title').value || 'BizDoc Report';
-      const body  = el('#body').value || '';
-      return { base, title, body };
-    }
-
-    // Upload handler
+    // Upload → Preview
     el('#btnUpload').addEventListener('click', async () => {
-      const f = el('#file').files[0];
-      if (!f) { alert('Select a file first.'); return; }
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('filename', (el('#filename').value || 'report'));
-      fd.append('title', el('#title').value || 'BizDoc Report');
-
-      show('#uploadStatus', true);
-      el('#uploadStatus').textContent = 'Uploading…';
+      const f = el('#file').files[0]; if(!f){ alert('Select a file first.'); return; }
+      const fd = new FormData(); fd.append('file', f); fd.append('filename', el('#filename').value||'report'); fd.append('title', el('#title').value||'BizDoc Report');
+      show('#uploadStatus', true); el('#uploadStatus').textContent = 'Uploading…';
       try {
-        const r = await fetch(`${APP}/api/upload`, { method: 'POST', body: fd });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'Upload failed');
-        el('#body').value = j.body || '';
-        el('#detectedHint').innerHTML = `<small class="muted">Detected: <b>${j.detected || 'unknown'}</b></small>`;
-        el('#uploadStatus').textContent = '✓ Uploaded';
-        el('#uploadStatus').style.borderColor = '#10b981';
-        el('#uploadStatus').style.color = '#10b981';
-      } catch (e) {
-        el('#uploadStatus').textContent = '× Error';
-        el('#uploadStatus').style.borderColor = '#b91c1c';
-        el('#uploadStatus').style.color = '#b91c1c';
-        alert(e.message || e);
-      }
+        const r = await fetch(`${APP}/api/upload`, { method:'POST', body: fd }); const j = await r.json();
+        if(!j.ok) throw new Error(j.error||'Upload failed');
+        el('#body').value = j.body || ''; el('#detectedHint').innerHTML = `<small class="muted">Detected: <b>${j.detected||'unknown'}</b></small>`;
+        el('#uploadStatus').textContent='✓ Uploaded'; el('#uploadStatus').style.borderColor='#10b981'; el('#uploadStatus').style.color='#10b981';
+      } catch(e){ el('#uploadStatus').textContent='× Error'; el('#uploadStatus').style.borderColor='#b91c1c'; el('#uploadStatus').style.color='#b91c1c'; alert(e.message||e); }
     });
 
     // Download buttons
-    el('#btnTxt').addEventListener('click', () => {
-      const { base, title, body } = vals();
-      postAndDownload({ type:'txt', filename: base.endsWith('.txt')?base:base+'.txt', title, body });
-    });
-    el('#btnDocx').addEventListener('click', () => {
-      const { base, title, body } = vals();
-      postAndDownload({ type:'docx', filename: base.endsWith('.docx')?base:base+'.docx', title, body });
-    });
-    el('#btnPdf').addEventListener('click', () => {
-      const { base, title, body } = vals();
-      postAndDownload({ type:'pdf', filename: base.endsWith('.pdf')?base:base+'.pdf', title, body });
+    el('#btnTxt').addEventListener('click', () => { const {base,title,body}=vals(); postAndDownload({type:'txt', filename: base.endsWith('.txt')?base:base+'.txt', title, body}); });
+    el('#btnDocx').addEventListener('click', () => { const {base,title,body}=vals(); postAndDownload({type:'docx', filename: base.endsWith('.docx')?base:base+'.docx', title, body}); });
+    el('#btnPdf').addEventListener('click', () => { const {base,title,body}=vals(); postAndDownload({type:'pdf', filename: base.endsWith('.pdf')?base:base+'.pdf', title, body}); });
+
+    // Analyze
+    async function analyzeNow(){
+      const title = el('#title').value || 'BizDoc Report';
+      const body  = el('#body').value || '';
+      const instruction = el('#instruction').value || '';
+      const r = await fetch(`${APP}/api/analyze`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title, body, instruction})});
+      const j = await r.json(); if(!j.ok) throw new Error(j.error||'Analyze failed');
+      analysisState.json = j.analysis || {};
+      el('#analysisJson').value = JSON.stringify(analysisState.json, null, 2);
+      el('#btnDownloadFromAnalysis').disabled = false;
+    }
+    el('#btnAnalyze').addEventListener('click', async ()=>{ try{ await analyzeNow(); }catch(e){ alert(e.message||e); }});
+    el('#btnDownloadFromAnalysis').addEventListener('click', async ()=>{
+      if(!analysisState.json){ alert('Run Analyze first.'); return; }
+      const title = el('#title').value || 'BizDoc Report';
+      const filenameBase = (el('#filename').value || 'report').trim();
+      await postAndDownload({ type:'pdf', filename: filenameBase.endsWith('.pdf')?filenameBase:filenameBase+'.pdf', title, analysis: analysisState.json });
     });
   </script>
 </body>

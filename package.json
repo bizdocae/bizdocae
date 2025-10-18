@@ -16,6 +16,6 @@
     "pdf-parse": "^2.3.12"
   },
   "engines": {
-    "node": "22.x"
+    "node": "20.x"
   }
 }

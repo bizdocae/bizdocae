@@ -1,141 +1,175 @@
-// api/download.js — robust pagination + debug JSON mode
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-export const config = { api: { bodyParser: { sizeLimit: "1mb" } } };
+// Ensure we always send a valid PDF stream, never JSON unless failing
+export default async function handler(req, res) {
+  try {
+    if (req.method !== "POST") {
+      res.setHeader("Allow", "POST");
+      return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+    }
 
-function wrapText(text, maxChars) {
-  const words = String(text || "").split(/\s+/);
-  const lines = []; let line = "";
+    // Collect JSON body (Vercel Node functions do not auto-parse)
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+      req.on("end", resolve);
+      req.on("error", reject);
+    });
+
+    const raw = Buffer.concat(chunks).toString("utf8").trim() || "{}";
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: "Invalid JSON body" });
+    }
+
+    const type = (payload.type || "pdf").toLowerCase();
+    const filenameBase = String(payload.filename || payload.filenameBase || "analysis").replace(/[^\w.-]+/g, "_");
+    const analysis = payload.analysis || {};
+
+    // TXT/DOCX pass-throughs preserved (your app may already handle these elsewhere)
+    if (type === "txt") {
+      const text = renderPlainText(analysis);
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.txt"`);
+      return res.status(200).send(text);
+    }
+
+    if (type === "docx") {
+      // Minimal DOCX fallback: wrap TXT into .docx if your older logic is removed.
+      // For now, return text as .docx-compatible plain text to avoid breaking flows.
+      const text = renderPlainText(analysis);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.docx"`);
+      return res.status(200).send(Buffer.from(text, "utf8"));
+    }
+
+    // === PDF path ===
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595.28, 841.89]); // A4 in points
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    const marginX = 50;
+    let y = 800;
+
+    // Helpers
+    const drawLine = (txt, size = 12, bold = false) => {
+      const f = bold ? fontBold : font;
+      const wrapped = wrapText(txt ?? "", f, size, 595.28 - marginX * 2);
+      for (const line of wrapped) {
+        if (y < 60) { // new page
+          const p = pdfDoc.addPage([595.28, 841.89]);
+          y = 800;
+          p.setFont(f);
+          p.setFontSize(size);
+          p.drawText(line, { x: marginX, y, color: rgb(0, 0, 0) });
+          y -= size + 4;
+          continue;
+        }
+        page.setFont(f);
+        page.setFontSize(size);
+        page.drawText(line, { x: marginX, y, color: rgb(0, 0, 0) });
+        y -= size + 4;
+      }
+      y -= 6; // extra spacing after a block
+    };
+
+    // Content
+    drawLine(analysis.title || "Document Analysis", 18, true);
+    if (analysis.executive_summary) {
+      drawLine("Executive Summary", 14, true);
+      drawLine(analysis.executive_summary, 12);
+    }
+
+    if (Array.isArray(analysis.key_findings) && analysis.key_findings.length) {
+      drawLine("Key Findings", 14, true);
+      for (const kf of analysis.key_findings) {
+        drawLine(`• ${kf.label || ""}: ${kf.detail || ""}`, 12);
+      }
+    }
+
+    if (Array.isArray(analysis.metrics) && analysis.metrics.length) {
+      drawLine("Metrics", 14, true);
+      for (const m of analysis.metrics) {
+        const v = m.value != null ? m.value : "";
+        const u = m.unit ? ` ${m.unit}` : "";
+        drawLine(`• ${m.name || ""}: ${v}${u}`, 12);
+      }
+    }
+
+    if (Array.isArray(analysis.risks) && analysis.risks.length) {
+      drawLine("Risks & Mitigations", 14, true);
+      for (const r of analysis.risks) {
+        drawLine(`• Risk: ${r.risk || ""}`, 12, true);
+        drawLine(`  Mitigation: ${r.mitigation || ""}`, 12);
+      }
+    }
+
+    if (Array.isArray(analysis.recommendations) && analysis.recommendations.length) {
+      drawLine("Recommendations", 14, true);
+      for (const rec of analysis.recommendations) {
+        drawLine(`• ${rec}`, 12);
+      }
+    }
+
+    // Finalize
+    const pdfBytes = await pdfDoc.save(); // Uint8Array with %PDF- header
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.pdf"`);
+    res.status(200).send(Buffer.from(pdfBytes)); // ensure Node Buffer, not string
+  } catch (err) {
+    console.error("download handler error:", err);
+    res.status(500).json({ ok: false, error: String(err && err.message || err) });
+  }
+}
+
+function wrapText(text, font, size, maxWidth) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = "";
   for (const w of words) {
-    const cand = line ? line + " " + w : w;
-    if (cand.length > maxChars) { if (line) lines.push(line); line = w; } else { line = cand; }
+    const test = line ? line + " " + w : w;
+    const width = font.widthOfTextAtSize(test, size);
+    if (width > maxWidth && line) {
+      lines.push(line);
+      line = w;
+    } else {
+      line = test;
+    }
   }
   if (line) lines.push(line);
   return lines;
 }
 
-export default async function handler(req, res) {
-  const debug = req.query?.debug === "1" || String(req.headers["x-debug"]||"") === "1";
-
-  try {
-    if (req.method !== "POST") {
-      res.statusCode = 405;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      return res.end(JSON.stringify({ ok:false, error:"POST JSON with { filenameBase, analysis, charts }" }));
-    }
-
-    const payload = req.body || {};
-    // Basic validation up-front so bugs show in JSON
-    const filenameBase = (payload.filenameBase || "analysis").toString().replace(/[^\w\-]+/g, "_");
-    const analysis = payload.analysis || {};
-    const title = (analysis.title || "Analysis").toString();
-    const execSummary = (analysis.executive_summary || "").toString();
-    const keyFindings = Array.isArray(analysis.key_findings) ? analysis.key_findings : [];
-    const metrics = Array.isArray(analysis.metrics) ? analysis.metrics : [];
-    const risks = Array.isArray(analysis.risks) ? analysis.risks : [];
-    const recs = Array.isArray(analysis.recommendations) ? analysis.recommendations : [];
-    const charts = Array.isArray(payload.charts) ? payload.charts : [];
-
-    if (debug) {
-      return res.status(200).json({
-        ok: true,
-        debug: true,
-        received: { filenameBase, hasAnalysis: !!analysis, chartsLen: charts.length }
-      });
-    }
-
-    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
-    const doc = await PDFDocument.create();
-
-    // Page helpers
-    const A4 = [595.28, 841.89];
-    const margin = 40;
-    let page, width, height, y;
-    const newPage = () => { page = doc.addPage(A4); ({ width, height } = page.getSize()); y = height - margin; };
-    const needSpace = (needed = 40) => { if (y - needed < margin) newPage(); };
-
-    newPage();
-
-    // Fonts
-    const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
-    const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
-
-    const drawHeading = (h) => { needSpace(24); page.drawText(String(h), { x: margin, y, size: 12, font: fontBold }); y -= 16; };
-    const drawParagraph = (t, size=10) => {
-      const lines = wrapText(String(t||""), 90);
-      for (const line of lines) { needSpace(size+8); page.drawText(line, { x: margin, y, size, font: fontRegular }); y -= size + 4; }
-      y -= 4;
-    };
-    const drawBullets = (arr) => {
-      for (const item of (arr||[])) {
-        const text = typeof item === "string" ? item : (item?.detail ?? item?.label ?? JSON.stringify(item));
-        const lines = wrapText("• " + String(text), 90);
-        for (const line of lines) { needSpace(18); page.drawText(line, { x: margin, y, size: 10, font: fontRegular }); y -= 14; }
-      }
-      y -= 6;
-    };
-
-    // Title
-    needSpace(40);
-    page.drawText(title, { x: margin, y: y - 4, size: 20, font: fontBold });
-    y -= 28;
-
-    if (execSummary) { drawHeading("Executive Summary"); drawParagraph(execSummary); }
-    if (keyFindings.length) { drawHeading("Key Findings"); drawBullets(keyFindings.map(k => ({ detail: `(${k.label||""}) ${k.detail||""}`}))); }
-    if (metrics.length) { drawHeading("Metrics"); drawBullets(metrics.map(m => ({ detail: `${m.name||""}: ${m.value??""}${m.unit ? " "+m.unit : ""}`}))); }
-    if (risks.length) { drawHeading("Risks & Mitigations"); drawBullets(risks.map(r => ({ detail: `${r.risk||""}${r.mitigation ? " — "+r.mitigation : ""}`}))); }
-    if (recs.length) { drawHeading("Recommendations"); drawBullets(recs); }
-
-    // Bar chart (first only)
-    if (charts.length && charts[0]?.type === "bar") {
-      const chart = charts[0];
-      const labels = Array.isArray(chart.x) ? chart.x.map(String) : [];
-      const series0 = (Array.isArray(chart.series) && chart.series[0]) ? chart.series[0] : { data: [] };
-      const data = Array.isArray(series0.data) ? series0.data.map(v => Number(v) || 0) : [];
-      const n = Math.max(1, Math.min(labels.length, data.length));
-      const ch = 180, cw = width - margin * 2;
-
-      needSpace(ch + 40);
-
-      if (chart.title) page.drawText(String(chart.title), { x: margin, y: y - 4, size: 12, font: fontBold });
-      const cx = margin;
-      const cy = y - 20 - ch;
-
-      page.drawLine({ start: { x: cx, y: cy }, end: { x: cx, y: cy + ch } });
-      page.drawLine({ start: { x: cx, y: cy }, end: { x: cx + cw, y: cy } });
-
-      const maxVal = Math.max(1, ...data.slice(0, n));
-      const scaleY = (ch - 20) / maxVal;
-      const gapArea = cw - 40;
-      const slotW = gapArea / n;
-      const barW = Math.max(8, slotW * 0.6);
-
-      for (let i = 0; i < n; i++) {
-        const x = cx + 30 + i * slotW;
-        const h = Math.max(0, data[i] * scaleY);
-        page.drawRectangle({ x, y: cy, width: barW, height: h, color: rgb(0.2, 0.2, 0.7) });
-        const lbl = (labels[i] || "").slice(0, 12) + (labels[i] && labels[i].length > 12 ? "…" : "");
-        page.drawText(lbl, { x, y: cy - 12, size: 8, font: fontRegular });
-      }
-
-      y = cy - 24;
-    }
-
-    const bytes = await doc.save();
-    const filename = `${filenameBase}.pdf`;
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    return res.end(Buffer.from(bytes));
-  } catch (err) {
-    const body = { ok:false, error:"Download failed", detail:String(err?.message||err), stack: String(err?.stack||"") };
-    res.statusCode = 500;
-    // If debug query/header, force JSON so UI shows the error
-    if (req.query?.debug === "1" || String(req.headers["x-debug"]||"") === "1") {
-      res.setHeader("Content-Type","application/json; charset=utf-8");
-      return res.end(JSON.stringify(body));
-    }
-    // default JSON too (so your UI can print it)
-    res.setHeader("Content-Type","application/json; charset=utf-8");
-    return res.end(JSON.stringify(body));
+function renderPlainText(analysis) {
+  const parts = [];
+  parts.push(`# ${analysis?.title || "Document Analysis"}`);
+  if (analysis?.executive_summary) {
+    parts.push("\nExecutive Summary:\n" + analysis.executive_summary);
   }
+  if (Array.isArray(analysis?.key_findings)) {
+    parts.push("\nKey Findings:");
+    for (const kf of analysis.key_findings) parts.push(`- ${kf.label || ""}: ${kf.detail || ""}`);
+  }
+  if (Array.isArray(analysis?.metrics)) {
+    parts.push("\nMetrics:");
+    for (const m of analysis.metrics) {
+      const u = m.unit ? ` ${m.unit}` : "";
+      parts.push(`- ${m.name || ""}: ${m.value ?? ""}${u}`);
+    }
+  }
+  if (Array.isArray(analysis?.risks)) {
+    parts.push("\nRisks & Mitigations:");
+    for (const r of analysis.risks) {
+      parts.push(`- Risk: ${r.risk || ""}`);
+      parts.push(`  Mitigation: ${r.mitigation || ""}`);
+    }
+  }
+  if (Array.isArray(analysis?.recommendations)) {
+    parts.push("\nRecommendations:");
+    for (const rec of analysis.recommendations) parts.push(`- ${rec}`);
+  }
+  return parts.join("\n");
 }

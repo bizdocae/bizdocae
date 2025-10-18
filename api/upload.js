@@ -4,10 +4,17 @@ import fs from "fs/promises";
 import path from "path";
 import mammoth from "mammoth";
 
+// CORS
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin","*");
   res.setHeader("Access-Control-Allow-Methods","GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization");
+}
+
+function looksPrintable(txt) {
+  // crude heuristic: >90% printable
+  const printables = (txt.match(/[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g) || []).length;
+  return printables / Math.max(1, txt.length) > 0.9;
 }
 
 export default async function handler(req, res) {
@@ -24,25 +31,58 @@ export default async function handler(req, res) {
 
       const filepath = Array.isArray(file) ? file[0].filepath : file.filepath;
       const origName = Array.isArray(file) ? file[0].originalFilename : file.originalFilename;
-      const ext = String(path.extname(origName || "").toLowerCase());
+      const mimetype = Array.isArray(file) ? file[0].mimetype : file.mimetype;
+      const ext = String(path.extname(origName || "") || "").toLowerCase();
 
+      let detected = "unknown";
       let extracted = "";
-      if (ext === ".txt") {
-        extracted = await fs.readFile(filepath, "utf-8");
-      } else if (ext === ".docx") {
+
+      // Prefer MIME if present
+      if (mimetype?.startsWith("text/")) {
+        const txt = await fs.readFile(filepath, "utf-8");
+        detected = mimetype;
+        extracted = txt;
+      }
+      else if (ext === ".txt") {
+        const txt = await fs.readFile(filepath, "utf-8");
+        detected = "text/plain (by ext)";
+        extracted = txt;
+      }
+      else if (
+        mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+        ext === ".docx"
+      ) {
         const buf = await fs.readFile(filepath);
         const out = await mammoth.extractRawText({ buffer: buf });
+        detected = "docx";
         extracted = out.value || "";
-      } else if (ext === ".pdf") {
-        // No OCR here; just acknowledge. You can integrate CloudConvert/Tesseract later.
-        extracted = "[PDF uploaded; OCR not enabled in this minimal upload handler]";
-      } else {
-        extracted = "[Unsupported type, treating as binary]";
+      }
+      else if (mimetype === "application/pdf" || ext === ".pdf") {
+        detected = "pdf";
+        extracted = "[PDF uploaded; OCR not enabled in this endpoint]";
+      }
+      else {
+        // No helpful MIME/ext → try read as UTF-8 and check printability
+        try {
+          const raw = await fs.readFile(filepath);
+          let txt = "";
+          try { txt = raw.toString("utf-8"); } catch { /* ignore */ }
+          if (txt && looksPrintable(txt)) {
+            detected = "text/plain (heuristic)";
+            extracted = txt;
+          } else {
+            detected = mimetype || "binary/unknown";
+            extracted = "[Unsupported type, treating as binary]";
+          }
+        } catch {
+          detected = mimetype || "binary/unknown";
+          extracted = "[Unsupported type, treating as binary]";
+        }
       }
 
-      // Example: return a payload your frontend can pass to /api/download-get
       return res.status(200).json({
         ok: true,
+        detected,
         filename: (fields.filename || "bizdoc").toString(),
         title: (fields.title || "BizDoc Analysis").toString(),
         body: extracted.slice(0, 12000) // safety cap

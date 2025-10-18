@@ -2,45 +2,93 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>BizDoc — Downloads</title>
+  <title>BizDoc — Analyzer & Downloads</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <style>
-    :root { --w: 760px; }
-    body { font-family: ui-sans-serif, system-ui, Arial; margin: 24px; display:flex; justify-content:center; }
-    .wrap { width: min(100%, var(--w)); }
-    label { display:block; margin: 12px 0 6px; font-weight: 600; }
-    input, textarea { width:100%; padding:10px; font-size:16px; border:1px solid #ddd; border-radius:8px; }
-    textarea { height: 200px; }
-    .row { display:flex; gap:12px; margin-top:16px; flex-wrap:wrap; }
-    button { padding:12px 16px; font-size:16px; border:0; border-radius:10px; cursor:pointer; }
-    .txt { background:#f1f5f9; }
-    .docx { background:#e0f2fe; }
-    .pdf { background:#fde68a; }
+    :root{--w:860px;}
+    *{box-sizing:border-box}
+    body{font-family:ui-sans-serif,system-ui,Arial;margin:0;display:flex;justify-content:center;background:#fafafa;color:#111}
+    header{background:#111;color:#fff;padding:16px 20px;display:flex;justify-content:center}
+    header .inner{width:min(100%,var(--w));display:flex;align-items:center;gap:12px}
+    header h1{font-size:18px;margin:0}
+    main{width:min(100%,var(--w));padding:22px}
+    .card{background:#fff;border:1px solid #eee;border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    label{display:block;margin:12px 0 6px;font-weight:600}
+    input[type="text"], textarea{width:100%;padding:10px;font-size:16px;border:1px solid #ddd;border-radius:10px;background:#fff}
+    textarea{height:220px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+    button{padding:12px 16px;font-size:15px;border:0;border-radius:10px;cursor:pointer}
+    .btn{background:#111;color:#fff}
+    .btn.secondary{background:#f1f5f9;color:#111}
+    .btn.info{background:#e0f2fe;color:#111}
+    .btn.warn{background:#fde68a;color:#111}
+    small.muted{color:#666}
+    .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;font-size:12px;border:1px solid #e5e7eb;background:#fff}
+    .hidden{display:none}
+    .grid{display:grid;grid-template-columns:1fr;gap:16px}
+    @media(min-width:800px){ .grid{grid-template-columns:1fr 1fr} }
+    .footer{color:#666;font-size:12px;margin-top:10px}
+    .ok{color:#059669;font-weight:600}
+    .err{color:#b91c1c;font-weight:600}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>BizDoc — Quick Downloads</h1>
-
-    <label for="filename">Filename</label>
-    <input id="filename" value="report" placeholder="e.g. report"/>
-
-    <label for="title">Title</label>
-    <input id="title" value="BizDoc Title"/>
-
-    <label for="body">Body</label>
-    <textarea id="body">Hello from BizDoc.</textarea>
-
-    <div class="row">
-      <button class="txt" id="btnTxt">Download TXT</button>
-      <button class="docx" id="btnDocx">Download DOCX</button>
-      <!-- keep the PDF button for testing if you want -->
-      <button class="pdf" id="btnPdf">Download PDF</button>
+  <header>
+    <div class="inner">
+      <div class="pill">BizDoc</div>
+      <h1>Analyzer & Downloads</h1>
     </div>
-  </div>
+  </header>
+
+  <main>
+    <!-- Upload & Preview -->
+    <div class="card">
+      <h2 style="margin:0 0 8px">1) Upload document (optional)</h2>
+      <p class="footer">Accepted: <b>TXT</b>, <b>DOCX</b>, <b>PDF</b> (PDF text requires OCR to extract; otherwise a placeholder note is used).</p>
+      <div class="row">
+        <input type="file" id="file" />
+        <button class="btn secondary" id="btnUpload">Upload & Preview</button>
+        <div id="uploadStatus" class="pill hidden"></div>
+      </div>
+    </div>
+
+    <!-- Inputs -->
+    <div class="grid">
+      <div class="card">
+        <h2 style="margin:0 0 8px">2) Set filename & title</h2>
+        <label for="filename">Filename (no extension)</label>
+        <input id="filename" type="text" value="report" placeholder="e.g. report"/>
+        <label for="title">Title</label>
+        <input id="title" type="text" value="BizDoc Report"/>
+        <p class="footer">Filenames are sanitized automatically; extensions are added based on the chosen format.</p>
+      </div>
+
+      <div class="card">
+        <h2 style="margin:0 0 8px">3) Preview / Body</h2>
+        <label for="body">Body text</label>
+        <textarea id="body">Hello from BizDoc.</textarea>
+        <div class="footer" id="detectedHint"><small class="muted">Tip: Upload a file to auto-fill this area.</small></div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card">
+      <h2 style="margin:0 0 8px">4) Download</h2>
+      <div class="row">
+        <button class="btn" id="btnTxt">Download TXT</button>
+        <button class="btn info" id="btnDocx">Download DOCX</button>
+        <button class="btn warn" id="btnPdf">Download PDF</button>
+      </div>
+      <p class="footer">Downloads are generated via <code>/api/download-get</code> with CORS enabled.</p>
+    </div>
+
+    <p class="footer">Runtime: serverless (Node 20 LTS) · Privacy: <code>Cache-Control: no-store</code> for downloads.</p>
+  </main>
 
   <script>
-    const APP = 'https://bizdoc-min.vercel.app'; // change if your prod base URL differs
+    const APP = 'https://bizdoc-min.vercel.app'; // change if your base URL differs
+    const el = s => document.querySelector(s);
+    const show = (n, yes) => el(n).classList.toggle('hidden', !yes);
 
     async function postAndDownload(payload) {
       const res = await fetch(`${APP}/api/download-get`, {
@@ -49,38 +97,62 @@
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
-        const txt = await res.text();
-        alert('Failed: ' + txt);
+        alert('Failed: ' + await res.text());
         return;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = payload.filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     }
 
     function vals() {
-      const base = (document.getElementById('filename').value || 'report').trim();
-      const title = document.getElementById('title').value || 'BizDoc';
-      const body  = document.getElementById('body').value || '';
+      const base = (el('#filename').value || 'report').trim();
+      const title = el('#title').value || 'BizDoc Report';
+      const body  = el('#body').value || '';
       return { base, title, body };
     }
 
-    document.getElementById('btnTxt').addEventListener('click', () => {
+    // Upload handler
+    el('#btnUpload').addEventListener('click', async () => {
+      const f = el('#file').files[0];
+      if (!f) { alert('Select a file first.'); return; }
+      const fd = new FormData();
+      fd.append('file', f);
+      fd.append('filename', (el('#filename').value || 'report'));
+      fd.append('title', el('#title').value || 'BizDoc Report');
+
+      show('#uploadStatus', true);
+      el('#uploadStatus').textContent = 'Uploading…';
+      try {
+        const r = await fetch(`${APP}/api/upload`, { method: 'POST', body: fd });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Upload failed');
+        el('#body').value = j.body || '';
+        el('#detectedHint').innerHTML = `<small class="muted">Detected: <b>${j.detected || 'unknown'}</b></small>`;
+        el('#uploadStatus').textContent = '✓ Uploaded';
+        el('#uploadStatus').style.borderColor = '#10b981';
+        el('#uploadStatus').style.color = '#10b981';
+      } catch (e) {
+        el('#uploadStatus').textContent = '× Error';
+        el('#uploadStatus').style.borderColor = '#b91c1c';
+        el('#uploadStatus').style.color = '#b91c1c';
+        alert(e.message || e);
+      }
+    });
+
+    // Download buttons
+    el('#btnTxt').addEventListener('click', () => {
       const { base, title, body } = vals();
       postAndDownload({ type:'txt', filename: base.endsWith('.txt')?base:base+'.txt', title, body });
     });
-
-    document.getElementById('btnDocx').addEventListener('click', () => {
+    el('#btnDocx').addEventListener('click', () => {
       const { base, title, body } = vals();
       postAndDownload({ type:'docx', filename: base.endsWith('.docx')?base:base+'.docx', title, body });
     });
-
-    document.getElementById('btnPdf').addEventListener('click', () => {
+    el('#btnPdf').addEventListener('click', () => {
       const { base, title, body } = vals();
       postAndDownload({ type:'pdf', filename: base.endsWith('.pdf')?base:base+'.pdf', title, body });
     });

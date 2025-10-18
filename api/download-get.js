@@ -14,10 +14,10 @@ function setDownloadHeaders(res, filename, contentType) {
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"; filename*=UTF-8''${enc}`);
   res.setHeader("Cache-Control", "no-store, max-age=0");
-  res.setHeader("X-BizDoc-Renderer", "v2-sections"); // <— marker so we know this code is live
+  res.setHeader("X-BizDoc-Renderer", "v2-clean"); // marker
 }
 
-// ---------- PDF builder with section headers + pagination ----------
+// ---------- PDF builder (emoji-safe) ----------
 async function buildPdf({ title = "BizDoc PDF", body = "Hello from BizDoc.", analysis = null }) {
   const pdf = await PDFDocument.create();
   let page = pdf.addPage([595.28, 841.89]); // A4
@@ -26,11 +26,13 @@ async function buildPdf({ title = "BizDoc PDF", body = "Hello from BizDoc.", ana
   const MARGIN_X = 50, TOP = PH - 50, BOTTOM = 60;
   let y = TOP;
 
-  function need(h) {
-    if (y - h < BOTTOM) { page = pdf.addPage([595.28, 841.89]); y = TOP; }
-  }
+  // Remove emojis and any non-ASCII characters (WinAnsi-safe)
+  const clean = (txt = "") => String(txt).replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+
+  function need(h) { if (y - h < BOTTOM) { page = pdf.addPage([595.28, 841.89]); y = TOP; } }
 
   function drawHeaderBar(label) {
+    label = clean(label);
     need(34); y -= 8;
     page.drawRectangle({ x: MARGIN_X - 6, y: y - 4, width: PW - (MARGIN_X * 2) + 12, height: 24, color: rgb(0.95, 0.95, 0.95) });
     page.drawText(label, { x: MARGIN_X, y, size: 14, font, color: rgb(0, 0, 0) });
@@ -38,6 +40,7 @@ async function buildPdf({ title = "BizDoc PDF", body = "Hello from BizDoc.", ana
   }
 
   function drawLine(txt, size = 12) {
+    txt = clean(txt);
     const max = 86;
     const words = String(txt || "").split(/\s+/);
     while (words.length) {
@@ -54,15 +57,15 @@ async function buildPdf({ title = "BizDoc PDF", body = "Hello from BizDoc.", ana
   function drawBullets(items = []) {
     for (const it of items) {
       need(20);
-      page.drawText(`• ${it.label || "Item"}: ${it.detail || ""}`, { x: MARGIN_X, y, size: 12, font });
+      const t = `• ${clean(it.label || "Item")}: ${clean(it.detail || "")}`;
+      page.drawText(t, { x: MARGIN_X, y, size: 12, font });
       y -= 18;
     }
   }
 
-  // simple charts (bar; pie/line omitted since you said “forget charts for now”)
   function drawBarChart(titleTxt, items = []) {
     if (!items.length) return;
-    drawHeaderBar("📊 " + (titleTxt || "Bar Chart"));
+    drawHeaderBar("Charts - " + (titleTxt || "Bar Chart"));
     const left = MARGIN_X + 20, right = PW - MARGIN_X, h = 150; need(h + 36);
     const bottom = y - h, axisY = bottom + 20, top = bottom + h, w = right - left;
     page.drawLine({ start: { x: left, y: axisY }, end: { x: right, y: axisY }, thickness: 1 });
@@ -74,7 +77,7 @@ async function buildPdf({ title = "BizDoc PDF", body = "Hello from BizDoc.", ana
       const v = Math.max(0, Number(it.value) || 0);
       const barH = (v / maxVal) * (h - 40);
       page.drawRectangle({ x, y: axisY, width: barW, height: barH, borderWidth: 0.5 });
-      page.drawText(String(it.label || "").slice(0, 12), { x, y: axisY - 12, size: 9, font });
+      page.drawText(clean(String(it.label || "").slice(0, 12)), { x, y: axisY - 12, size: 9, font });
       page.drawText(String(v), { x, y: axisY + barH + 4, size: 9, font });
       x += barW + gap;
     }
@@ -82,29 +85,25 @@ async function buildPdf({ title = "BizDoc PDF", body = "Hello from BizDoc.", ana
   }
 
   // Title
-  drawHeaderBar("📄 " + title);
+  drawHeaderBar("Title - " + title);
 
   if (analysis && typeof analysis === "object") {
-    if (analysis.executive_summary) { drawHeaderBar("📄 Executive Summary"); drawLine(analysis.executive_summary, 12); }
-    if (Array.isArray(analysis.key_findings) && analysis.key_findings.length) { drawHeaderBar("🔎 Key Findings"); drawBullets(analysis.key_findings); }
-    if (Array.isArray(analysis.risks) && analysis.risks.length) { drawHeaderBar("⚠️ Risks"); drawBullets(analysis.risks); }
+    if (analysis.executive_summary) { drawHeaderBar("Executive Summary"); drawLine(analysis.executive_summary, 12); }
+    if (Array.isArray(analysis.key_findings) && analysis.key_findings.length) { drawHeaderBar("Key Findings"); drawBullets(analysis.key_findings); }
+    if (Array.isArray(analysis.risks) && analysis.risks.length) { drawHeaderBar("Risks"); drawBullets(analysis.risks); }
     if (Array.isArray(analysis.charts) && analysis.charts.length) {
-      // only bar here (we can re-enable others later)
-      for (const ch of analysis.charts) {
-        const items = ch.items || [];
-        drawBarChart(ch.title || "Chart", items);
-      }
+      for (const ch of analysis.charts) { const items = ch.items || []; drawBarChart(ch.title || "Chart", items); }
     }
-    if (analysis.recommendations) { drawHeaderBar("✅ Recommendations"); drawLine(analysis.recommendations, 12); }
+    if (analysis.recommendations) { drawHeaderBar("Recommendations"); drawLine(analysis.recommendations, 12); }
   } else {
-    drawHeaderBar("📄 Body");
+    drawHeaderBar("Body");
     drawLine(body, 12);
   }
 
   return await pdf.save();
 }
 
-// ---------- DOCX builder (unchanged) ----------
+// ---------- DOCX builder ----------
 async function buildDocx({ title = "BizDoc DOCX", body = "Hello from BizDoc." }) {
   const doc = new Document({
     sections: [{
@@ -144,7 +143,7 @@ export default async function handler(req, res) {
       title = data.title || "BizDoc";
       body = (data.text || data.body || "Hello from BizDoc.").toString();
       if (body.length > 60000) body = body.slice(0, 60000) + "\n[truncated]";
-      analysis = data.analysis; // important
+      analysis = data.analysis;
     } else {
       return res.status(405).json({ ok: false, error: "Method not allowed" });
     }

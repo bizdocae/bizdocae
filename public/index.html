@@ -81,7 +81,7 @@
   <p class="lead">Upload a <b>text-based</b> PDF (not scanned). Add optional instruction. Click <b>Analyze</b>, then <b>Download PDF</b>.</p>
 
   <label for="file">PDF file</label>
-  <input id="file" type="file" accept="application/pdf,.pdf" />
+  <input id="file" type="file" accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.txt,text/plain" />
 
   <label for="instruction">Instruction (optional)</label>
   <textarea id="instruction" placeholder="Executive summary + key findings + risks + one KPI bar chart"></textarea>
@@ -137,7 +137,7 @@
       lastFormData = fd;
       lastFilenameBase = baseName(f.name);
 
-      const r = await fetch('/api/process?debug=1', { method:'POST', body: fd });
+      const r = await fetch('/api/analyze?debug=1', { method:'POST', body: fd });
       const text = await r.text();
       let body;
       try { body = JSON.parse(text); } catch { body = { raw: text }; }
@@ -171,7 +171,7 @@
       // You can pass an explicit filename if your API supports it:
       fd.append('filename', `${lastFilenameBase || 'analysis'}.pdf`);
 
-      const r = await fetch('/api/process', { method:'POST', body: fd });
+      const r = await fetch('/api/analyze', { method:'POST', body: fd });
       if (!r.ok) {
         const tx = await r.text().catch(() => '');
         let body;

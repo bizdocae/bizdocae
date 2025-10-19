@@ -1,5 +1,8 @@
-// Orchestrator: always refine first, then render the PDF with the existing generator.
-// No changes to your working /api/report-bizdoc-pdf.
+// Orchestrator: refine before download, with an optional second refine ("double-check").
+// - Accepts: { text, type, refine?, double?, analysis?, debug? }
+//   * refine (default true): run analyzer that already does draft+refine
+//   * double (default true): run an extra refine pass right before PDF
+//   * debug (optional): if true, return JSON instead of PDF for QA
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req, res) {
@@ -11,64 +14,76 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ ok:false, error:"Use POST" });
 
     const body = await readBody(req);
-    // Accept either {text,type} OR {analysis} OR both.
     const text = typeof body?.text === "string" ? body.text : "";
     const type = typeof body?.type === "string" ? body.type : (body?.docType || "");
     const givenAnalysis = body?.analysis && typeof body.analysis === "object" ? body.analysis : null;
 
-    const wantsRefine = body?.refine !== false; // default true
+    const wantsRefine = body?.refine !== false;     // default true
+    const wantsDouble = body?.double !== false;     // default true
+    const wantDebug   = !!body?.debug;              // default false
     const baseUrl = getBaseUrl(req);
 
     let analysis = null;
 
+    // 1) Pre-analysis: call analyze endpoint (it already draft+refines)
     if (wantsRefine && text) {
-      // Ask our analyzer to refine (it already runs two-pass).
       const r = await fetch(baseUrl + "/api/analyze-bizdoc", {
         method: "POST",
         headers: { "Content-Type":"application/json" },
         body: JSON.stringify({ text, type, refine: true })
-      });
-      if (!r.ok) {
-        // Fallback: use any given analysis or fail cleanly
-        if (!givenAnalysis) {
-          const errTxt = await r.text().catch(()=> "");
-          return res.status(502).json({ ok:false, error:"Analyzer failed", detail: `HTTP ${r.status}`, body: errTxt.slice(0,400) });
-        }
-      } else {
+      }).catch(()=>null);
+
+      if (r && r.ok) {
         const json = await r.json().catch(()=> ({}));
         if (json?.ok && json?.analysis) analysis = json.analysis;
       }
     }
 
+    // 2) If no text or analyzer failed, fallback to provided analysis or try analyzer once
     if (!analysis) {
-      // If we didn’t run analyzer (no text), or it failed, use provided analysis.
       if (givenAnalysis) {
         analysis = givenAnalysis;
       } else if (text) {
-        // As a last resort, try analyzer without refine param
         const r2 = await fetch(baseUrl + "/api/analyze-bizdoc", {
           method: "POST",
           headers: { "Content-Type":"application/json" },
           body: JSON.stringify({ text, type })
-        });
-        if (!r2.ok) {
-          const errTxt = await r2.text().catch(()=> "");
-          return res.status(502).json({ ok:false, error:"Analyzer failed (fallback)", detail: `HTTP ${r2.status}`, body: errTxt.slice(0,400) });
+        }).catch(()=>null);
+        if (!r2 || !r2.ok) {
+          const errTxt = r2 ? (await r2.text().catch(()=> "")) : "No response";
+          return res.status(502).json({ ok:false, error:"Analyzer failed", detail: r2 ? `HTTP ${r2.status}` : "network error", body: errTxt.slice(0,400) });
         }
         const json2 = await r2.json().catch(()=> ({}));
         if (json2?.ok && json2?.analysis) analysis = json2.analysis;
+      } else {
+        return res.status(400).json({ ok:false, error:"Provide either 'text' (preferred) or 'analysis'." });
       }
     }
 
-    if (!analysis) {
-      return res.status(400).json({ ok:false, error:"Provide either 'text' (preferred) or 'analysis'." });
+    // 3) Post-analysis: do a second refine (double-check) just before PDF
+    let finalAnalysis = analysis;
+    if (wantsDouble) {
+      try {
+        const { refineAnalysisWithGPT } = await import("./lib/refine.js");
+        const refinedAgain = await refineAnalysisWithGPT(text || "", finalAnalysis);
+        if (refinedAgain && typeof refinedAgain === "object" && refinedAgain.summary) {
+          finalAnalysis = refinedAgain;
+        }
+      } catch {
+        // swallow, keep finalAnalysis as-is
+      }
     }
 
-    // Now call the existing PDF generator with the refined analysis.
+    // 4) Debug mode: return the post-refined JSON instead of a PDF
+    if (wantDebug) {
+      return res.status(200).json({ ok:true, analysis: finalAnalysis, note:"debug mode - not a PDF" });
+    }
+
+    // 5) Render the PDF with your existing generator
     const pdfResp = await fetch(baseUrl + "/api/report-bizdoc-pdf", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ analysis })
+      body: JSON.stringify({ analysis: finalAnalysis })
     });
 
     if (!pdfResp.ok) {
@@ -76,7 +91,6 @@ export default async function handler(req, res) {
       return res.status(502).json({ ok:false, error:"PDF generator failed", detail:`HTTP ${pdfResp.status}`, body: errTxt.slice(0,400) });
     }
 
-    // Stream the PDF through with proper headers.
     const buf = Buffer.from(await pdfResp.arrayBuffer());
     res.setHeader("Content-Type","application/pdf");
     res.setHeader("Content-Disposition",'attachment; filename="bizdoc_report.pdf"');
@@ -89,7 +103,6 @@ export default async function handler(req, res) {
 }
 
 function getBaseUrl(req){
-  // Prefer absolute; fall back to vercel/app host header.
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host = req.headers.host || "localhost:3000";
   return `${proto}://${host}`;

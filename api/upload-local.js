@@ -3,10 +3,10 @@ export const config = { runtime: "nodejs", api: { bodyParser: false } };
 import multer from "multer";
 import pdfParse from "pdf-parse";
 
-// 10 MB cap (adjust as needed)
+// 10 MB cap
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 function runMulter(req, res) {
@@ -14,8 +14,7 @@ function runMulter(req, res) {
     upload.single("file")(req, res, (err) => {
       if (err && err.code === "LIMIT_FILE_SIZE") {
         const e = new Error("File too large. Max 10MB.");
-        e.statusCode = 413;
-        return reject(e);
+        e.statusCode = 413; return reject(e);
       }
       return err ? reject(err) : resolve();
     });
@@ -23,7 +22,6 @@ function runMulter(req, res) {
 }
 
 export default async function handler(req, res) {
-  // CORS / preflight
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -45,10 +43,11 @@ export default async function handler(req, res) {
     }
 
     const baseUrl = getBaseUrl(req);
+    // Use your analyzer (already chunking + refine); return analysis JSON
     const ar = await fetch(baseUrl + "/api/analyze-bizdoc", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ text, type: "financials" })
+      body: JSON.stringify({ text, type: "document" }) // generic; analyzer will infer
     });
 
     if (!ar.ok) {
@@ -60,7 +59,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok:true, analysis: data.analysis });
   } catch (e) {
     const sc = e?.statusCode || 500;
-    return res.status(sc).json({ ok:false, error: String(e?.message || e) });
+    return res.status(sc).json({ ok:false, error:String(e?.message||e) });
   }
 }
 

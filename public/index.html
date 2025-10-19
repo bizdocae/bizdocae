@@ -193,3 +193,13 @@ async function toBase64(file){
 <!-- ---------- Upload PDF Section ---------- -->
 <input type="file" id="pdfUpload" accept="application/pdf">
 <script src="/upload.js"></script>
+
+<!-- ===== Single Upload Button (Large PDF Friendly) ===== -->
+<section style="margin:16px 0;padding:12px;border:1px solid #eee;border-radius:8px">
+  <h3>Analyze & Download (One Button)</h3>
+  <input type="file" id="oneUploadInput" accept="application/pdf" />
+  <button id="oneUploadBtn" style="margin-left:8px;">Analyze & Download AI PDF</button>
+  <br/><br/>
+  <textarea id="oneUploadOutput" style="width:100%;height:220px" placeholder="Analysis will appear here..."></textarea>
+</section>
+<script src="/one-upload.js"></script>

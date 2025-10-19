@@ -1,5 +1,4 @@
-// Executive-grade English analyzer (safe build): no lookbehind, no exotic regex.
-// Produces narrative summary, KPIs, risks, actions, and chart-ready data.
+// Executive-grade English analyzer (safe build): no lookbehind; all matchAll use global regex.
 export default async function handler(req, res) {
   try {
     res.setHeader("Access-Control-Allow-Origin","*");
@@ -13,60 +12,37 @@ export default async function handler(req, res) {
     const docTypeReq = String(body?.type ?? body?.docType ?? "").toLowerCase();
     if (!text) return res.status(400).json({ ok:false, error:"Provide 'text' to analyze." });
 
-    // --- Detections ---
     const detectedLanguage = /[\u0600-\u06FF]/.test(text) ? "ara" : "eng";
     const docType = docTypeReq || guessDocType(text);
     const sentences = splitSentencesSafe(text);
 
-    // Entities
     const entities = extractEntities(text);
-
-    // Money & currencies
     const { currencies, amounts } = extractCurrenciesAndAmounts(text);
-
-    // Dates
     const dates = extractDates(text);
-
-    // Sentiment
     const tone = scoreSentiment(text);
 
-    // KPIs
     const kpis = buildKpis(text, amounts, currencies);
     deriveFinancialsFromAmounts(kpis, amounts);
 
-    // Health
     const fh = scoreFinancialHealth(text, kpis, tone, entities);
-
-    // Insights, Risks, Actions
     const executiveInsights = buildInsights(kpis, tone, fh, entities);
     const riskMatrix = buildRisks(text, fh, sentences);
     const actions = buildActions(text, fh, kpis, riskMatrix);
-
-    // Charts
     const charts = buildCharts(amounts, kpis);
 
-    // Summary + trend
     const summary = buildSummary(docType, entities, kpis, fh, tone);
     const trendInterpretation = interpretTrend(kpis, tone);
 
-    const analysis = {
-      detectedLanguage,
-      docType,
-      summary,
-      executiveInsights,
-      keyEntities: entities,
-      dates: dates.slice(0,8),
-      amounts: amounts.slice(0,16),
-      kpis,
-      trendInterpretation,
-      financialHealth: fh,
-      riskMatrix,
-      actions,
-      charts,
-      confidence: computeConfidence(kpis, amounts, tone, riskMatrix)
-    };
-
-    return res.status(200).json({ ok:true, analysis });
+    return res.status(200).json({
+      ok:true,
+      analysis: {
+        detectedLanguage, docType, summary, executiveInsights,
+        keyEntities: entities, dates: dates.slice(0,8),
+        amounts: amounts.slice(0,16), kpis, trendInterpretation,
+        financialHealth: fh, riskMatrix, actions, charts,
+        confidence: computeConfidence(kpis, amounts, tone, riskMatrix)
+      }
+    });
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e?.message || e) });
   }
@@ -84,18 +60,15 @@ function capitalize(s){ s=safeStr(s); return s? s[0].toUpperCase()+s.slice(1):s;
 
 /* ----- SAFE sentence split (no lookbehind) ----- */
 function splitSentencesSafe(t){
-  // Split on ".", "!" or "?" followed by whitespace+capital/Arabic, but without lookbehind.
   const out=[]; let buf="";
   for (let i=0;i<t.length;i++){
     const ch=t[i]; buf+=ch;
     if (ch==="."||ch==="!"||ch==="?"){
-      // peek ahead to decide boundary
-      const j=i+1; const next=t.slice(j).match(/^\s*([A-Z\u0600-\u06FF])/);
+      const next = t.slice(i+1).match(/^\s*([A-Z\u0600-\u06FF])/);
       if (next){ out.push(buf.trim()); buf=""; }
     }
   }
   if (buf.trim()) out.push(buf.trim());
-  // Fallback if too few sentences
   if (out.length<=1) return t.split(/\n+/).map(s=>s.trim()).filter(Boolean);
   return out;
 }
@@ -197,7 +170,6 @@ function buildKpis(text, amounts, currencies){
   const totalVal = totals.reduce((s,a)=>s+Math.abs(a.value),0);
   if (totalVal>0) k.push({ label:"Total", value: totalVal, unit: (totals[0]?.currency || currencies[0] || "") });
 
-  // Dedup by label
   const seen=new Set(); const out=[];
   for (const item of k){ const key=item.label.toLowerCase(); if (seen.has(key)) continue; seen.add(key); out.push(item); }
   return out.slice(0,16);
@@ -216,11 +188,18 @@ function deriveFinancialsFromAmounts(kpis, amounts){
 }
 function hasKpi(list, label){ return list.some(k=>k.label.toLowerCase()===label.toLowerCase()); }
 function pickLargest(arr){ return arr.length? arr.sort((a,b)=>Math.abs(b.value)-Math.abs(a.value))[0] : null; }
+
+/* ----- matchAll helpers to force /g flag ----- */
+function allMatches(t, rx){
+  const flags = rx.flags.includes('g') ? rx.flags : (rx.flags + 'g');
+  const g = new RegExp(rx.source, flags);
+  return [...t.matchAll(g)];
+}
 function findPercentNear(t, nearRx){
-  const m=[...t.matchAll(/\b([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/g)];
-  if (!m.length) return null;
+  const perc = allMatches(t, /\b([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/g); // already global
+  if (!perc.length) return null;
   let best=null, bestDist=1e9;
-  for (const mm of m){
+  for (const mm of perc){
     const idx=mm.index||0;
     const dist=distanceToKeyword(t, idx, nearRx);
     if (dist<bestDist){ best=mm; bestDist=dist; }
@@ -228,7 +207,7 @@ function findPercentNear(t, nearRx){
   const v=Number(best?.[1]); return isFinite(v)?v:null;
 }
 function findNumberNear(t, nearRx){
-  const nums=[...t.matchAll(/\b([0-9]{1,4})(?:\.\d+)?\b/g)];
+  const nums = allMatches(t, /\b([0-9]{1,4})(?:\.\d+)?\b/g); // ensure global
   let best=null, bestDist=1e9;
   for (const mm of nums){
     const idx=mm.index||0; const dist=distanceToKeyword(t, idx, nearRx);
@@ -237,9 +216,9 @@ function findNumberNear(t, nearRx){
   const v=Number(best?.[1]); return isFinite(v)?v:null;
 }
 function distanceToKeyword(t, idx, rx){
-  let d=1e9; const M=[...t.matchAll(rx)];
-  for (const m of M){ const i=m.index||0; const dd=Math.abs(i-idx); if (dd<d) d=dd; }
-  return M.length?d:1e9;
+  const m = allMatches(t, rx);
+  let d=1e9; for (const mm of m){ const i=mm.index||0; const dd=Math.abs(i-idx); if (dd<d) d=dd; }
+  return m.length?d:1e9;
 }
 
 /* ----- Health, Insights, Risks, Actions ----- */
@@ -269,6 +248,7 @@ function scoreFinancialHealth(text, kpis, tone, entities){
 
   return { profitabilityScore, liquidityScore, concentrationRiskScore, anomalyFlags, rationale };
 }
+
 function buildInsights(kpis, tone, fh, entities){
   const bullets=[];
   const gr=kpis.find(k=>/growth/i.test(k.label)); const mg=kpis.find(k=>/margin/i.test(k.label)); const li=kpis.find(k=>/liquidity/i.test(k.label));
@@ -279,6 +259,7 @@ function buildInsights(kpis, tone, fh, entities){
   if ((entities.roles?.supplier||[]).length) bullets.push(`Key supplier: ${entities.roles.supplier[0]}.`);
   return bullets.slice(0,6).length?bullets.slice(0,6):["Performance broadly stable; limited signals."];
 }
+
 function buildRisks(text, fh, sentences){
   const risks=[]; const add=(risk,severity,evidence,mitigation)=>risks.push({ risk,severity,evidence,mitigation });
   const ev=(rx)=>{ for (const s of sentences){ if (rx.test(s)) return s.slice(0,220); } return null; };
@@ -297,6 +278,7 @@ function buildRisks(text, fh, sentences){
 
   return risks.slice(0,8);
 }
+
 function buildActions(text, fh, kpis, risks){
   const out=[ { priority:1, action:"13-week cash flow forecast", owner:"Finance", dueDays:7 } ];
   if (fh.anomalyFlags.includes("Elevated DSO"))
@@ -305,7 +287,6 @@ function buildActions(text, fh, kpis, risks){
     out.push({ priority:2, action:"COGS & pricing review", owner:"CFO", dueDays:14 });
   if (fh.concentrationRiskScore>=4)
     out.push({ priority:2, action:"Customer diversification plan", owner:"Sales", dueDays:30 });
-  // dedupe
   const seen=new Set(); const ded=[]; for (const a of out){ const k=a.action.toLowerCase(); if (seen.has(k)) continue; seen.add(k); ded.push(a); }
   return ded.slice(0,10);
 }
@@ -334,7 +315,6 @@ function buildCharts(amounts, kpis){
 function makeTrend(n, base, gPct){ const out=[]; let v=base; const step=(Number(gPct)||0)/Math.max(1,(n-1)); for(let i=0;i<n;i++){ out.push(Math.max(1,v)); v=v*(1+step/100); } return out; }
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-/* ----- Summary & Confidence ----- */
 function buildSummary(docType, entities, kpis, fh, tone){
   const gr = kpis.find(k=>/growth/i.test(k.label))?.value;
   const mg = kpis.find(k=>/margin/i.test(k.label))?.value;

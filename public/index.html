@@ -143,4 +143,5 @@
     });
   </script>
 </body>
+<script>fetch('/api/version').then(r=>r.json()).then(v=>{const el=document.createElement('div');el.style.cssText='text-align:center;margin-top:40px;padding:10px;font-size:12px;color:#777';const c=v.env==='production'?'#059669':(v.env==='preview'?'#ca8a04':'#6b7280');el.innerHTML=`<hr style='margin:16px 0;border:none;border-top:1px solid #eee'><div><strong>Env:</strong> <span style='color:${c}'>${v.env}</span></div><div><strong>Branch:</strong> ${v.branch}</div><div><strong>Commit:</strong> ${String(v.commit||'').slice(0,7)}</div><div><strong>Deployed:</strong> ${new Date(v.deployedAt).toLocaleString()}</div>`;document.body.appendChild(el)}).catch(()=>console.warn('Version info unavailable'));</script>
 </html>

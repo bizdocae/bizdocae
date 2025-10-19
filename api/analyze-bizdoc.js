@@ -545,3 +545,80 @@ function buildEvidenceFromPartials(chunks, partials, maxLen){
   }
   return evidence.slice(0, maxLen);
 }
+
+// ---- Safe union merge of draft + refined (avoid losing signals) ----
+function mergeAnalyses(draft, refined){
+  const out = { ...draft, ...refined };
+
+  // Merge arrays carefully
+  out.keyEntities = mergeEntities(draft.keyEntities, refined.keyEntities);
+  out.amounts     = mergeAmountsSafe(draft.amounts||[], refined.amounts||[], 40);
+  out.kpis        = mergeKpisSafe(draft.kpis||[], refined.kpis||[], 24);
+  out.executiveInsights = dedupArray([...(draft.executiveInsights||[]), ...(refined.executiveInsights||[])], 10);
+  out.riskMatrix  = (refined.riskMatrix && refined.riskMatrix.length ? refined.riskMatrix : draft.riskMatrix)||[];
+  out.actions     = dedupActions([...(draft.actions||[]), ...(refined.actions||[])], 12);
+  out.charts      = pickCharts(draft.charts, refined.charts); // prefer refined if valid; fallback to draft
+
+  // Keep best summary (prefer refined if present)
+  out.summary = refined.summary || draft.summary;
+
+  // Keep stronger health if refined looks sane; otherwise draft
+  if (refined.financialHealth && typeof refined.financialHealth === "object") {
+    out.financialHealth = refined.financialHealth;
+  } else {
+    out.financialHealth = draft.financialHealth;
+  }
+
+  // Confidence: take max of both
+  const c1 = Number(draft.confidence||0), c2 = Number(refined.confidence||0);
+  out.confidence = Math.max(c1, c2, 0.6);
+
+  return out;
+}
+function mergeEntities(a={}, b={}){
+  const roles = {};
+  const keys = ["client","supplier","bank","investor","regulator","other"];
+  for (const k of keys){
+    roles[k] = dedupArray([...(a?.roles?.[k]||[]), ...(b?.roles?.[k]||[])], 12);
+  }
+  const parties = dedupArray([...(a.parties||[]), ...(b.parties||[])], 16);
+  return { roles, parties };
+}
+function mergeAmountsSafe(a, b, cap){
+  const out = [...a];
+  const idx = (x)=>`${(x.label||"").toLowerCase()}|${x.currency||""}`;
+  for (const x of b){
+    const k = idx(x);
+    const i = out.findIndex(y=>idx(y)===k);
+    if (i<0) out.push(x);
+    else if (Math.abs(Number(x.value)||0) > Math.abs(Number(out[i].value)||0)) out[i] = x;
+    if (out.length>=cap) break;
+  }
+  return out;
+}
+function mergeKpisSafe(a, b, cap){
+  const out = [...a];
+  const key = (x)=> (x.label||"").toLowerCase();
+  for (const x of b){
+    const i = out.findIndex(y=>key(y)===key(x));
+    if (i<0) out.push(x);
+    else if (isFinite(Number(x.value)) && Math.abs(Number(x.value)) > Math.abs(Number(out[i].value)||0)) out[i] = x;
+    if (out.length>=cap) break;
+  }
+  // normalize canonical KPI naming where possible
+  for (const k of out){
+    if (/operating\s*margin/i.test(k.label)) k.label = "Margin %";
+    if (/growth/i.test(k.label) && !/%/.test(String(k.unit||""))) k.unit = "%";
+    if (/liquidity/i.test(k.label) && !/x/i.test(String(k.unit||""))) k.unit = "x";
+    if (/DSO/i.test(k.label) && !/d/i.test(String(k.unit||""))) k.unit = "d";
+  }
+  return out.slice(0,cap);
+}
+function dedupArray(arr, cap){ const s=new Set(); const out=[]; for (const v of arr){ const k=JSON.stringify(v); if (s.has(k)) continue; s.add(k); out.push(v); if (out.length>=cap) break; } return out; }
+function dedupActions(arr, cap){ const seen = new Set(); const out=[]; for (const a of arr){ const k=(a.action||"").toLowerCase(); if (seen.has(k)) continue; seen.add(k); out.push(a); if (out.length>=cap) break; } return out; }
+function pickCharts(draftCharts={}, refinedCharts={}){
+  const valid = (c)=> c && Array.isArray(c.bars) && Array.isArray(c.pie);
+  if (valid(refinedCharts)) return refinedCharts;
+  if (valid(draftCharts)) return draftCharts;
+  return { bars:[], lines:[], pie:[] };
+}

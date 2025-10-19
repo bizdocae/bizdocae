@@ -13,7 +13,8 @@
     "multiparty": "^4.2.3",
     "openai": "^4.104.0",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "^2.3.12"
+    "pdf-parse": "^2.3.12",
+    "zod": "^3.25.76"
   },
   "engines": {
     "node": "20.x"

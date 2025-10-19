@@ -1,5 +1,5 @@
-// BizDoc PDF: safe template, page breaks, numbers, progress bars,
-// Bars + Lines + Composition (stacked) chart. All helpers hoisted (no init-order bugs).
+// BizDoc PDF: safe template, page breaks, number formatting, progress bars,
+// Bars + Lines + Composition (stacked) chart. No SVG; all helpers defined; no runtime deps beyond pdf-lib.
 export default async function handler(req, res) {
   try {
     res.setHeader("Access-Control-Allow-Origin","*");
@@ -8,7 +8,6 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ ok:false, error:"Use POST" });
 
-    // dynamic import avoids ESM/CJS issues
     const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
 
     const body = await readBody(req);
@@ -30,7 +29,7 @@ export default async function handler(req, res) {
 
     let y = height - margin;
 
-    // ---------- HOISTED HELPERS (function declarations) ----------
+    // ---------- Helpers ----------
     function T(f, size, x, yy, text, color=rgb(0,0,0)){
       page.drawText(String(text ?? ""), { x, y: yy, size, font: f, color });
     }
@@ -189,7 +188,7 @@ export default async function handler(req, res) {
       const C = { x: margin, y: y-120, w: colW, h: 120, pad: 16 };
       page.drawRectangle({ x: C.x, y: C.y, width: C.w, height: C.h, borderColor: rgb(0.8,0.8,0.8), borderWidth: 1, color: rgb(1,1,1) });
 
-      const shades = makeShades(raw.length);
+      const shades = makeShades(raw.length, rgb);
       const barX = C.x + C.pad;
       const barY = C.y + C.h - C.pad - 18;
       const barW = C.w - C.pad*2;
@@ -213,6 +212,9 @@ export default async function handler(req, res) {
       });
 
       y = C.y - 10;
+    }
+    function makeShades(n, rgbFn){
+      const arr=[]; for (let i=0;i<n;i++){ const t=0.2+0.7*(i/Math.max(1,n-1)); arr.push(rgbFn(t,t,t)); } return arr;
     }
 
     // --- Header
@@ -291,12 +293,12 @@ export default async function handler(req, res) {
     T(font, 10, margin, 46, `${brand.company || "BizDoc"} • Confidence: ${pct(analysis.confidence)}`);
     T(font, 10, width - margin - textWidth(font, 10, today()), 46, today());
 
-    // --- Output
     const bytes = await pdf.save();
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", 'attachment; filename="bizdoc_report.pdf"');
     return res.status(200).send(Buffer.from(bytes));
   } catch (e) {
+    // Return the error string so you can see it with curl if anything ever breaks again
     return res.status(500).json({ ok:false, error: String(e?.message || e) });
   }
 }
@@ -311,9 +313,6 @@ function safeInt(n){ const v = parseInt(n,10); return isFinite(v) ? v : "-"; }
 function safeNum(n){ const v = Number(n); return isFinite(v) ? v : 0; }
 function safeStr(s){ return (s==null) ? "" : String(s); }
 function today(){ return new Date().toISOString().slice(0,10); }
-function makeShades(n){ const arr=[]; for (let i=0;i<n;i++){ const t=0.2+0.7*(i/Math.max(1,n-1)); const {rgb:RGB}=requireRgb(); arr.push(RGB(t,t,t)); } return arr; }
-// small helper to access rgb inside utils without closure hassles
-function requireRgb(){ return { rgb: (r,g,b)=>({ r, g, b, type: 'RGB' }) }; }
 
 async function readBody(req){
   const chunks=[]; for await (const c of req) chunks.push(c);

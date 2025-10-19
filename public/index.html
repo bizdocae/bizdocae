@@ -13,52 +13,143 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .muted{color:#666;font-size:14px}
 textarea{width:100%;height:280px;white-space:pre-wrap;}
 label{font-weight:600}
+small{color:#666}
 </style>
 </head>
 <body>
 <h1>BizDoc OCR</h1>
-<p class="muted">Paste a PDF/Image URL (supports Arabic + English). Choose a language or keep <b>Auto</b>.</p>
+<p class="muted">Upload a local PDF/Image or paste a URL. Language can be <b>Auto</b> (Engine 2) or forced.</p>
+
 <div class="row">
-  <input id="fileUrl" type="url" placeholder="https://example.com/file.pdf or .jpg" style="flex:1;min-width:260px" />
+  <input id="fileLocal" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp" />
+  <small>Max size depends on plan; prefer clear scans.</small>
+</div>
+
+<div class="row" style="margin-top:6px">
+  <input id="fileUrl" type="url" placeholder="Or paste: https://example.com/file.pdf or .jpg" style="flex:1;min-width:260px" />
   <select id="language">
     <option value="auto">Auto (Engine 2)</option>
     <option value="ara">Arabic (ara)</option>
     <option value="eng">English (eng)</option>
   </select>
 </div>
-<div class="row" style="margin-top:10px">
+
+<div class="row" style="margin-top:12px">
   <button id="btnJson">Analyze (JSON)</button>
   <button id="btnPdf">Analyze & Download PDF</button>
   <label style="margin-left:12px"><input id="hideText" type="checkbox" checked /> Hide text layer in PDF</label>
 </div>
+
 <p class="muted" id="status" style="margin-top:10px;"></p>
+
 <label for="output" style="display:block;margin-top:14px;">Extracted Text (preview):</label>
 <textarea id="output" placeholder="Result text will appear here…"></textarea>
+
 <script>
-const q=s=>document.querySelector(s);
-const fileUrl=q('#fileUrl'),language=q('#language'),hideText=q('#hideText');
-const statusEl=q('#status'),out=q('#output'),btnJson=q('#btnJson'),btnPdf=q('#btnPdf');
-function busy(b){btnJson.disabled=b;btnPdf.disabled=b;statusEl.textContent=b?'Processing…':'';}
+const qs = s => document.querySelector(s);
+const fileInput = qs('#fileLocal'), urlInput = qs('#fileUrl'), lang = qs('#language'), hideText = qs('#hideText');
+const btnJson = qs('#btnJson'), btnPdf = qs('#btnPdf'), statusEl = qs('#status'), out = qs('#output');
 
-btnJson.addEventListener('click',async()=>{
-  const url=fileUrl.value.trim();if(!url)return alert('Please paste a file URL first.');busy(true);
-  try{
-    const resp=await fetch('/api/ocr-ocrspace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,language:language.value,wantText:true,wantSearchablePdf:true})});
-    const data=await resp.json();if(!resp.ok||!data.ok)throw new Error(data.error||'OCR failed');
-    out.value=data.text||'';statusEl.textContent=data.pdfUrl?'Searchable PDF created (temporary). Use the PDF button to download.':'Done.';
-  }catch(e){out.value='';statusEl.textContent='Error: '+e.message;}finally{busy(false);}
+function busy(b){ btnJson.disabled=b; btnPdf.disabled=b; statusEl.textContent = b ? 'Processing…' : ''; }
+
+btnJson.addEventListener('click', async () => {
+  busy(true);
+  try {
+    const file = fileInput.files && fileInput.files[0];
+    const language = lang.value;
+
+    if (file) {
+      // Local file → send base64 JSON to upload endpoint
+      const {b64,mime} = await toBase64(file);
+      const resp = await fetch('/api/ocr-ocrspace-upload', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileB64: b64, filename: file.name, mime, language, wantText:true, wantSearchablePdf:true })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || 'OCR failed');
+      out.value = data.text || '';
+      statusEl.textContent = data.pdfUrl ? 'Searchable PDF created (temporary). Use the PDF button to download.' : 'Done.';
+      return;
+    }
+
+    // Fallback: URL flow
+    const url = urlInput.value.trim();
+    if (!url) return alert('Select a file OR paste a URL.');
+    const resp = await fetch('/api/ocr-ocrspace', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ url, language, wantText:true, wantSearchablePdf:true })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'OCR failed');
+    out.value = data.text || '';
+    statusEl.textContent = data.pdfUrl ? 'Searchable PDF created (temporary). Use the PDF button to download.' : 'Done.';
+  } catch(e) {
+    out.value = '';
+    statusEl.textContent = 'Error: ' + e.message;
+  } finally {
+    busy(false);
+  }
 });
 
-btnPdf.addEventListener('click',async()=>{
-  const url=fileUrl.value.trim();if(!url)return alert('Please paste a file URL first.');busy(true);
-  try{
-    const resp=await fetch('/api/ocr-ocrspace-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,language:language.value,hideText:hideText.checked})});
-    if(!resp.ok){const err=await safeJson(resp);throw new Error(err?.error||('HTTP '+resp.status));}
-    const blob=await resp.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ocr.pdf';
-    document.body.appendChild(a);a.click();URL.revokeObjectURL(a.href);a.remove();statusEl.textContent='Downloaded.';
-  }catch(e){statusEl.textContent='Error: '+e.message;}finally{busy(false);}
+btnPdf.addEventListener('click', async () => {
+  busy(true);
+  try {
+    const file = fileInput.files && fileInput.files[0];
+    const language = lang.value;
+
+    if (file) {
+      const {b64,mime} = await toBase64(file);
+      const resp = await fetch('/api/ocr-ocrspace-upload-pdf', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileB64: b64, filename: file.name, mime, language, hideText: hideText.checked })
+      });
+      if (!resp.ok) {
+        let err=null; try{err=await resp.json();}catch{}
+        throw new Error((err && err.error) || ('HTTP '+resp.status));
+      }
+      const blob = await resp.blob();
+      forceDownload(blob, file.name.replace(/\.[^.]+$/,'') + '.pdf');
+      statusEl.textContent = 'Downloaded.';
+      return;
+    }
+
+    const url = urlInput.value.trim();
+    if (!url) return alert('Select a file OR paste a URL.');
+    const resp = await fetch('/api/ocr-ocrspace-pdf', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ url, language, hideText: hideText.checked })
+    });
+    if (!resp.ok) {
+      let err=null; try{err=await resp.json();}catch{}
+      throw new Error((err && err.error) || ('HTTP '+resp.status));
+    }
+    const blob = await resp.blob();
+    forceDownload(blob, 'ocr.pdf');
+    statusEl.textContent = 'Downloaded.';
+  } catch(e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  } finally {
+    busy(false);
+  }
 });
-async function safeJson(r){try{return await r.json();}catch{return null;}}
+
+function forceDownload(blob, name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=name || 'ocr.pdf';
+  document.body.appendChild(a); a.click();
+  URL.revokeObjectURL(a.href); a.remove();
+}
+
+async function toBase64(file){
+  const buff = await file.arrayBuffer();
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(buff)));
+  return { b64, mime: file.type || 'application/octet-stream' };
+}
 </script>
 </body>
 </html>

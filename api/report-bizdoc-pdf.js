@@ -1,4 +1,5 @@
-// BizDoc PDF: safe template, page breaks, number formatting, progress bars, Bars + Lines charts (clean + robust).
+// BizDoc PDF: safe template, page breaks, number formatting, progress bars,
+// Bars + Lines + Pie (donut) charts in clean grayscale with crash guards.
 export default async function handler(req, res) {
   try {
     res.setHeader("Access-Control-Allow-Origin","*");
@@ -73,7 +74,6 @@ export default async function handler(req, res) {
     const section = (name) => { ensureSpace(40); T(bold, 12, margin, y, name); y -= 14; };
 
     const progress = (label, value01) => {
-      // value01 in [0..1]
       const v = clamp01(value01);
       const H = 10, W = Math.min(280, colW);
       const yBar = y - H;
@@ -113,7 +113,6 @@ export default async function handler(req, res) {
     };
 
     const linesChart = (title, items) => {
-      // items = [{ x: string, y: number }]
       const data = (Array.isArray(items) ? items : [])
         .map(p => ({ x: safeStr(p?.x), y: safeNum(p?.y) }))
         .filter(p => isFinite(p.y));
@@ -122,7 +121,6 @@ export default async function handler(req, res) {
       ensureSpace(200);
       T(bold, 12, margin, y, title); y -= 12;
 
-      // Frame
       const C = { x: margin, y: y-160, w: colW, h: 160, pad: 24 };
       page.drawRectangle({ x: C.x, y: C.y, width: C.w, height: C.h, borderColor: rgb(0.8,0.8,0.8), borderWidth: 1, color: rgb(1,1,1) });
 
@@ -136,11 +134,9 @@ export default async function handler(req, res) {
       const n = data.length;
       const stepX = n > 1 ? (innerW / (n - 1)) : innerW;
 
-      // Axes (safe line drawer)
-      drawLineSafe(page, {x: innerX, y: innerY}, {x: innerX, y: innerY + innerH}); // Y axis
-      drawLineSafe(page, {x: innerX, y: innerY}, {x: innerX + innerW, y: innerY}); // X axis
+      drawLineSafe(page, {x: innerX, y: innerY}, {x: innerX, y: innerY + innerH}); // Y
+      drawLineSafe(page, {x: innerX, y: innerY}, {x: innerX + innerW, y: innerY}); // X
 
-      // Y ticks (4)
       for (let i=0; i<=4; i++){
         const yy = innerY + (innerH * i/4);
         drawLineSafe(page, {x: innerX, y: yy}, {x: innerX + innerW, y: yy}, 0.5, rgb(0.92,0.92,0.92));
@@ -148,19 +144,15 @@ export default async function handler(req, res) {
         page.drawText(smartNum(val), { x: innerX - 36, y: yy - 4, size: 8, font, color: rgb(0.3,0.3,0.3) });
       }
 
-      // Points + polyline
       const pts = data.map((d, i) => {
         const x = innerX + i * stepX;
         const yv = innerY + ((d.y - minY) / rangeY) * innerH;
         return { x, y: yv, label: d.x, yVal: d.y };
       });
 
-      // Connect points
       for (let i=1; i<pts.length; i++){
         drawLineSafe(page, pts[i-1], pts[i], 1.2, rgb(0.2,0.2,0.2));
       }
-
-      // Draw points + X labels
       for (const p of pts) {
         page.drawRectangle({ x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3, color: rgb(0.2,0.2,0.2) });
         page.drawText(String(p.label).slice(0,10), { x: p.x - 8, y: innerY - 12, size: 8, font, color: rgb(0.3,0.3,0.3) });
@@ -169,16 +161,102 @@ export default async function handler(req, res) {
       y = C.y - 10;
     };
 
+    // --- Pie / Donut Chart ---
+    const pieChart = (title, items) => {
+      const raw = (Array.isArray(items) ? items : [])
+        .map(p => ({ label: safeStr(p?.label), value: Math.max(0, safeNum(p?.value)) }))
+        .filter(p => isFinite(p.value));
+      const total = raw.reduce((s,a)=>s+a.value, 0);
+      if (!total) return;
+
+      ensureSpace(220);
+      T(bold, 12, margin, y, title); y -= 12;
+
+      const C = { x: margin, y: y-180, w: colW, h: 180, pad: 12 };
+      page.drawRectangle({ x: C.x, y: C.y, width: C.w, height: C.h, borderColor: rgb(0.8,0.8,0.8), borderWidth: 1, color: rgb(1,1,1) });
+
+      const cx = C.x + C.w*0.30;
+      const cy = C.y + C.h*0.55;
+      const R  = Math.min(C.w, C.h) * 0.35;
+      const rInner = R * 0.55; // donut
+
+      // Try vector arcs via drawSvgPath; if not available, fallback to stacked bar
+      const drawSlice = (startRad, endRad, shade) => {
+        const largeArc = (endRad - startRad) > Math.PI ? 1 : 0;
+        const sx = cx + R * Math.cos(startRad), sy = cy + R * Math.sin(startRad);
+        const ex = cx + R * Math.cos(endRad),   ey = cy + R * Math.sin(endRad);
+        const sxi = cx + rInner * Math.cos(endRad), syi = cy + rInner * Math.sin(endRad);
+        const exi = cx + rInner * Math.cos(startRad), eyi = cy + rInner * Math.sin(startRad);
+        const path = [
+          `M ${sx} ${sy}`,
+          `A ${R} ${R} 0 ${largeArc} 1 ${ex} ${ey}`,
+          `L ${sxi} ${syi}`,
+          `A ${rInner} ${rInner} 0 ${largeArc} 0 ${exi} ${eyi}`,
+          "Z"
+        ].join(" ");
+        try {
+          page.drawSvgPath(path, { color: shade });
+        } catch {
+          // fallback: tiny radial quads to approximate
+          const steps = 20;
+          let a0 = startRad;
+          for (let i=1;i<=steps;i++){
+            const a1 = startRad + (endRad-startRad)*i/steps;
+            const x0 = cx + rInner*Math.cos(a0), y0 = cy + rInner*Math.sin(a0);
+            const x1 = cx + R*Math.cos(a0),     y1 = cy + R*Math.sin(a0);
+            const x2 = cx + R*Math.cos(a1),     y2 = cy + R*Math.sin(a1);
+            const x3 = cx + rInner*Math.cos(a1),y3 = cy + rInner*Math.sin(a1);
+            drawQuad(page, x0,y0,x1,y1,x2,y2,x3,y3, shade);
+            a0 = a1;
+          }
+        }
+      };
+
+      let angle = -Math.PI/2; // start at 12 o'clock
+      const shades = makeShades(raw.length);
+      raw.forEach((seg, idx) => {
+        const frac = seg.value / total;
+        const end = angle + frac * Math.PI * 2;
+        drawSlice(angle, end, shades[idx]);
+        angle = end;
+      });
+
+      // Legend (right side)
+      const legendX = C.x + C.w*0.60;
+      let ly = cy + Math.min(C.h*0.35, 60);
+      const legend = raw.slice(0, 14).sort((a,b)=>b.value-a.value);
+      for (let i=0;i<legend.length;i++){
+        const shade = shades[i];
+        // swatch
+        page.drawRectangle({ x: legendX, y: ly-10, width: 10, height: 10, color: shade, borderColor: rgb(0.7,0.7,0.7), borderWidth: 0.5 });
+        const label = `${legend[i].label.slice(0,18)} — ${pct(legend[i].value/total)}`;
+        page.drawText(label, { x: legendX + 16, y: ly-10, size: 9, font, color: rgb(0.2,0.2,0.2) });
+        ly -= 14;
+      }
+
+      y = C.y - 10;
+    };
+
+    const drawQuad = (pg,x0,y0,x1,y1,x2,y2,x3,y3, color) => {
+      // approximate by two triangles
+      try {
+        pg.drawSvgPath(`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} Z`, { color });
+        pg.drawSvgPath(`M ${x0} ${y0} L ${x2} ${y2} L ${x3} ${y3} Z`, { color });
+      } catch {
+        // last resort: small rectangles along the outer radius (visual fallback)
+        const rx = Math.min(x1,x2), ry = Math.min(y1,y2);
+        const rw = Math.max(1, Math.abs(x2-x1)), rh = Math.max(1, Math.abs(y2-y1));
+        pg.drawRectangle({ x: rx, y: ry, width: rw, height: rh, color });
+      }
+    };
+
     const drawLineSafe = (pg, start, end, thickness=0.8, color=rgb(0.7,0.7,0.7)) => {
       try {
-        // pdf-lib supports drawLine on recent versions
         pg.drawLine({ start, end, thickness, color });
       } catch {
-        // Fallback: thin rectangle (axis-aligned only)
         const x1 = Math.min(start.x, end.x), x2 = Math.max(start.x, end.x);
         const y1 = Math.min(start.y, end.y), y2 = Math.max(start.y, end.y);
         const w = Math.max(1, x2 - x1), h = Math.max(1, y2 - y1);
-        // If diagonal, approximate with small steps
         if (w > 1 && h > 1) {
           const steps = Math.ceil(Math.hypot(w,h)/4);
           for (let i=0;i<steps;i++){
@@ -207,7 +285,7 @@ export default async function handler(req, res) {
     y = wrap(font, 12, margin, y, colW, analysis.summary || "-");
     y -= 6;
 
-    // --- Financial Health (with progress bars)
+    // --- Financial Health
     const fh = analysis.financialHealth || {};
     section("Financial Health");
     progress("Profitability", score01(fh.profitabilityScore));
@@ -262,21 +340,19 @@ export default async function handler(req, res) {
 
     // --- Charts
     const bars = analysis?.charts?.bars;
-    if (Array.isArray(bars) && bars.length) {
-      barsChart("Chart: Bars", bars);
-    }
+    if (Array.isArray(bars) && bars.length) barsChart("Chart: Bars", bars);
 
     const lines = analysis?.charts?.lines;
-    if (Array.isArray(lines) && lines.length) {
-      linesChart("Chart: Trend", lines);
-    }
+    if (Array.isArray(lines) && lines.length) linesChart("Chart: Trend", lines);
+
+    const pie = analysis?.charts?.pie;
+    if (Array.isArray(pie) && pie.length) pieChart("Chart: Composition", pie);
 
     // --- Footer
     HR(60);
     T(font, 10, margin, 46, `${brand.company || "BizDoc"} • Confidence: ${pct(analysis.confidence)}`);
     T(font, 10, width - margin - w(font, 10, today()), 46, today());
 
-    // --- Output
     const bytes = await pdf.save();
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", 'attachment; filename="bizdoc_report.pdf"');
@@ -291,10 +367,21 @@ function clamp01(x){ const n = Number(x); return isFinite(n) ? Math.max(0, Math.
 function score01(s){ const n = Number(s); return isFinite(n) ? Math.max(0, Math.min(1, n/5)) : 0; }
 function pct(n){ return isFinite(n) ? Math.round(n*100)+"%" : "-"; }
 function fmtNum(n){ const v = Number(n); return isFinite(v) ? new Intl.NumberFormat("en-US",{maximumFractionDigits:2}).format(v) : "-"; }
+function smartNum(n){ const v = Number(n); if (!isFinite(v)) return "-"; const k=Math.abs(v)>=1000?1:0; return new Intl.NumberFormat("en-US",{maximumFractionDigits: k?0:2}).format(v); }
 function safeInt(n){ const v = parseInt(n,10); return isFinite(v) ? v : "-"; }
 function safeNum(n){ const v = Number(n); return isFinite(v) ? v : 0; }
 function safeStr(s){ return (s==null) ? "" : String(s); }
 function today(){ return new Date().toISOString().slice(0,10); }
+
+function makeShades(n){
+  // Return n grayscale rgb() entries between dark and light
+  const arr = [];
+  for (let i=0;i<n;i++){
+    const t = 0.2 + 0.7*(i/(Math.max(1,n-1))); // 0.2..0.9
+    arr.push(rgb(t,t,t));
+  }
+  return arr;
+}
 
 async function readBody(req){
   const chunks=[]; for await (const c of req) chunks.push(c);

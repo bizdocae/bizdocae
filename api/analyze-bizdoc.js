@@ -1,9 +1,4 @@
-// Executive-grade English analyzer (refined further):
-// - Reject Q2/quarters & “days” numbers as amounts
-// - Explicit "grew 12%" growth
-// - Flexible "margin near/of/≈ 18%" patterns
-// - Money-only charts (skip ratios/tiny nums)
-// - No lookbehind; all matchAll use /g
+export const config = { runtime: "nodejs" };
 
 export default async function handler(req, res) {
   try {
@@ -20,35 +15,34 @@ export default async function handler(req, res) {
 
     const detectedLanguage = /[\u0600-\u06FF]/.test(text) ? "ara" : "eng";
     const docType = docTypeReq || guessDocType(text);
-    const sentences = splitSentencesSafe(text);
 
-    const entities = extractEntities(text);
-    const { currencies, amounts } = extractCurrenciesAndAmounts(text);
-    const dates = extractDates(text);
-    const tone = scoreSentiment(text);
+    // Large-document support: chunk -> analyze per chunk -> aggregate
+    const { aggregated, evidenceText } = analyzeLarge(text, docType);
+    const {
+      entities, currencies, amounts, dates, tone, kpis,
+      fh, executiveInsights, riskMatrix, actions, charts,
+      summary, trendInterpretation
+    } = aggregated;
 
-    const kpis = buildKpis(text, amounts, currencies);
-    deriveFinancialsFromAmounts(kpis, amounts);
+    const analysisDraft = {
+      detectedLanguage, docType, summary, executiveInsights,
+      keyEntities: entities, dates: dates.slice(0,12),
+      amounts: amounts.slice(0,40), kpis: kpis.slice(0,24),
+      trendInterpretation: trendInterpretation.slice(0,6),
+      financialHealth: fh, riskMatrix: riskMatrix.slice(0,12),
+      actions: actions.slice(0,12), charts,
+      confidence: computeConfidence(kpis, amounts, tone, riskMatrix)
+    };
 
-    const fh = scoreFinancialHealth(text, kpis, tone, entities);
-    const executiveInsights = buildInsights(kpis, tone, fh, entities);
-    const riskMatrix = buildRisks(text, fh, sentences);
-    const actions = buildActions(text, fh, kpis, riskMatrix);
-    const charts = buildCharts(amounts, kpis);
-
-    const summary = buildSummary(docType, entities, kpis, fh, tone);
-    const trendInterpretation = interpretTrend(kpis, tone);
-
-    return res.status(200).json({
-      ok:true,
-      analysis: {
-        detectedLanguage, docType, summary, executiveInsights,
-        keyEntities: entities, dates: dates.slice(0,8),
-        amounts: amounts.slice(0,16), kpis, trendInterpretation,
-        financialHealth: fh, riskMatrix, actions, charts,
-        confidence: computeConfidence(kpis, amounts, tone, riskMatrix)
-      }
-    });
+    // Two-pass refine with GPT using only trimmed evidence (never full big doc)
+    try {
+      const { refineAnalysisWithGPT } = await import("./lib/refine.js");
+      const refined = await refineAnalysisWithGPT(evidenceText, analysisDraft);
+      const final = (refined && typeof refined === "object" && refined.summary) ? refined : analysisDraft;
+      return res.status(200).json({ ok:true, analysis: final });
+    } catch {
+      return res.status(200).json({ ok:true, analysis: analysisDraft });
+    }
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e?.message || e) });
   }
@@ -125,30 +119,19 @@ function extractCurrenciesAndAmounts(t){
     const nextSlice = t.slice(start+numStr.length, start+numStr.length+3);
     const cur = m[1]||m[3]||null;
 
-    // reject if number is adjacent to a letter (e.g., "Q2", "FY2025")
-    if (/[A-Za-z]/.test(prevCh)) continue;
+    if (/[A-Za-z]/.test(prevCh)) continue;         // reject Q2/FY2025 etc.
+    if (/^\s*[%x]\b/i.test(nextSlice)) continue;   // reject 12% or 1.6x
 
-    // reject if immediately followed by %, or 'x' ratio
-    if (/^\s*[%x]\b/i.test(nextSlice)) continue;
-
-    // parse numeric
     const val = Number(numStr.replace(/[\s,]/g,''));
     if (!isFinite(val) || Math.abs(val)===0) continue;
 
     const W=64;
     const around=t.slice(Math.max(0,start-W), Math.min(t.length, start+numStr.length+W)).toLowerCase();
-
-    // if time unit / DSO context nearby, skip (unless explicit currency)
-    const timeLike = /\b(day|days|week|weeks|month|months|quarter|q1|q2|q3|q4)\b/.test(around) || /\bdso\b/.test(around);
+    const timeLike = /\b(day|days|week|weeks|month|months|quarter|q1|q2|q3|q4|dso)\b/.test(around);
     if (!cur && timeLike) continue;
 
-    // finance keyword context
     const hasKeyword = /(total|grand\s*total|amount\s*due|revenue|sales|cost|cogs|expense|tax|vat|payment|balance|profit)/.test(around);
-
-    // numeric shape hints
     const looksThousands = /(\d{1,3}[,\s]\d{3})/.test(numStr);
-
-    // final acceptance
     const accept = !!(cur || looksThousands || Math.abs(val)>=1000 || (hasKeyword && !timeLike && Math.abs(val)>=10));
     if (!accept) continue;
 
@@ -175,7 +158,7 @@ function extractDates(t){
   const out=[];
   (t.match(/\b(20\d{2})[-\/.](0?[1-9]|1[0-2])[-\/.](0?[1-9]|[12]\d|3[01])\b/g)||[]).forEach(d=>out.push(d));
   (t.match(/\b(0?[1-9]|[12]\d|3[01])[-\/.](0?[1-9]|1[0-2])[-\/.](20\d{2})\b/g)||[]).forEach(d=>out.push(d));
-  (t.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t\.?|tember)|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+20\d{2}\b/gi)||[]).forEach(d=>out.push(d));
+  (t.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t\.?|tember)|Oct(?:ober)?|Nov(?:ember)?)\s+20\d{2}\b/gi)||[]).forEach(d=>out.push(d));
   return [...new Set(out)].slice(0,12);
 }
 
@@ -191,7 +174,7 @@ function scoreSentiment(t){
 
 /* helpers for matchAll with /g */
 function allMatches(t, rx){
-  const flags = rx.flags.includes('g') ? rx.flags : (rx.flags + 'g');
+  const flags = rx.flags?.includes('g') ? rx.flags : (rx.flags ? rx.flags + 'g' : 'g');
   const g = new RegExp(rx.source, flags);
   return [...t.matchAll(g)];
 }
@@ -205,22 +188,29 @@ function distanceToKeyword(t, idx, rx){
 function buildKpis(text, amounts, currencies){
   const k=[];
 
-  // Growth: explicit "grew 12%" (or "grew by 12%")
-  const grew = text.match(/\bgrew(?:\s+by)?\s+([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i);
-  if (grew) k.push({ label:"Revenue Growth %", value:Number(grew[1]), unit:"%" });
-  else {
-    // fallback: percent nearest to growth words
-    const growthPct = findPercentNear(text, /(growth|revenue|sales|topline)/i);
-    if (growthPct!=null) k.push({ label:"Revenue Growth %", value: Number(growthPct), unit:"%" });
+  // Robust growth detection
+  let growthPct=null;
+  const rxs=[
+    /\brevenue\s+grew(?:\s+by)?\s+([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i,
+    /\btopline\s+grew(?:\s+by)?\s+([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i,
+    /\bgrowth\s+(?:of|at)\s+([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i,
+    /\b(revenue|sales|topline)\s+(?:increased|rose|up)\s+(?:by\s+)?([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i,
+    /\bgrew(?:\s+by)?\s+([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i
+  ];
+  for (const rx of rxs){ const m=text.match(rx); if(m){ growthPct=Number(m[2]||m[1]); break; } }
+  if (growthPct==null){
+    const near=findPercentNear(text, /(growth|grew|revenue|sales|topline)/i);
+    if (near!=null) growthPct=near;
   }
+  if (growthPct!=null) k.push({ label:"Revenue Growth %", value:Number(growthPct), unit:"%" });
 
-  // Margin: support "18% margin" OR "margin near/of/about ≈ 18%"
+  // Margin
   const m1 = text.match(/\b([0-9]{1,2}(?:\.\d{1,2})?)\s*%\s*(?:net|operating|gross)?\s*margin\b/i);
   const m2 = text.match(/\bmargin(?:\s*(?:near|around|about|of|≈|~=|=)\s*|\s+)([0-9]{1,2}(?:\.\d{1,2})?)\s*%/i);
   const marginPct = m1 ? Number(m1[1]) : (m2 ? Number(m2[1]) : null);
   if (marginPct!=null) k.push({ label:"Margin %", value: marginPct, unit:"%" });
 
-  // Liquidity ratio: if explicit "current/quick ratio 1.6", otherwise hint with "~1.6x" near liquidity words
+  // Liquidity ratio
   const liqMatch = text.match(/\b(current|quick)\s*ratio[:\s]*([0-9]+(?:\.[0-9]+)?)\b/i);
   if (liqMatch) k.push({ label:"Liquidity Ratio", value:Number(liqMatch[2]), unit:"x" });
   else {
@@ -228,7 +218,7 @@ function buildKpis(text, amounts, currencies){
     if (liqHint) k.push({ label:"Liquidity Ratio", value:Number(liqHint[1]), unit:"x" });
   }
 
-  // DSO / receivables
+  // DSO
   const dso = findNumberNear(text, /(dso|days\s*sales\s*outstanding|receivable[s]?\s*days)/i);
   if (dso!=null) k.push({ label:"DSO (days)", value:Number(dso), unit:"d" });
 
@@ -237,10 +227,10 @@ function buildKpis(text, amounts, currencies){
   const totalVal = totals.reduce((s,a)=>s+Math.abs(a.value),0);
   if (totalVal>0) k.push({ label:"Total", value: totalVal, unit: (totals[0]?.currency || currencies[0] || "") });
 
-  // Dedup
+  // Dedup by label
   const seen=new Set(); const out=[];
   for (const item of k){ const key=item.label.toLowerCase(); if (seen.has(key)) continue; seen.add(key); out.push(item); }
-  return out.slice(0,16);
+  return out.slice(0,24);
 }
 function findPercentNear(t, nearRx){
   const perc = allMatches(t, /\b([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/g);
@@ -277,7 +267,7 @@ function deriveFinancialsFromAmounts(kpis, amounts){
 function hasKpi(list, label){ return list.some(k=>k.label.toLowerCase()===label.toLowerCase()); }
 function pickLargest(arr){ return arr.length? arr.sort((a,b)=>Math.abs(b.value)-Math.abs(a.value))[0] : null; }
 
-/* health, insights, risks, actions (unchanged from last good version) */
+/* health, insights, risks, actions */
 function scoreFinancialHealth(text, kpis, tone, entities){
   const growth = (kpis.find(k=>/growth/i.test(k.label))?.value) ?? (tone.score>0?8:(tone.score<0?-6:0));
   const margin = (kpis.find(k=>/margin/i.test(k.label))?.value) ?? (tone.score>0?20:12);
@@ -330,7 +320,7 @@ function buildRisks(text, fh, sentences){
   if (fh.concentrationRiskScore>=4)
     add("Counterparty concentration","medium", "Few key clients/suppliers mentioned", "Diversify customers; multi-source suppliers");
 
-  return risks.slice(0,8);
+  return risks.slice(0,12);
 }
 function buildActions(text, fh, kpis, risks){
   const out=[ { priority:1, action:"13-week cash flow forecast", owner:"Finance", dueDays:7 } ];
@@ -341,12 +331,12 @@ function buildActions(text, fh, kpis, risks){
   if (fh.concentrationRiskScore>=4)
     out.push({ priority:2, action:"Customer diversification plan", owner:"Sales", dueDays:30 });
   const seen=new Set(); const ded=[]; for (const a of out){ const k=a.action.toLowerCase(); if (seen.has(k)) continue; seen.add(k); ded.push(a); }
-  return ded.slice(0,10);
+  return ded.slice(0,12);
 }
 
 /* charts — money only */
 function buildCharts(amounts, kpis){
-  const money = amounts.filter(a => Math.abs(a.value)>=10 || a.currency); // skip tiny ratios
+  const money = amounts.filter(a => Math.abs(a.value)>=10 || a.currency);
   const bars=[...money].sort((a,b)=>Math.abs(b.value)-Math.abs(a.value)).slice(0,6)
     .map(a=>({ label:(a.label||"Amt").slice(0,12), value:Math.abs(Number(a.value)||0) }));
 
@@ -389,4 +379,169 @@ function interpretTrend(kpis, tone){
 }
 function computeConfidence(kpis, amounts, tone, risks){
   return clamp01(0.55 + 0.1*(kpis.length>2) + 0.1*(amounts.length>3) + 0.05*(tone.positive+tone.negative>1) + 0.05*(risks.length>0));
+}
+
+/* ===================== LARGE DOCUMENT SUPPORT ===================== */
+const MAX_CHARS_PER_PASS = 80_000;     // rule-based analyzer budget per chunk
+const MAX_RELEVANT_EVIDENCE = 10_000;  // what we send to LLM refine
+
+function analyzeLarge(text, docType){
+  if (text.length <= MAX_CHARS_PER_PASS) {
+    const single = analyzeOne(text, docType);
+    const evidenceText = buildEvidenceText(text, single.kpis, MAX_RELEVANT_EVIDENCE);
+    return { aggregated: single, evidenceText };
+  }
+  const chunks = smartChunks(text, MAX_CHARS_PER_PASS);
+  const partials = [];
+  for (const chunk of chunks){
+    partials.push(analyzeOne(chunk, docType));
+    if (partials.length > 24) break; // safety cap
+  }
+  const aggregated = aggregatePartials(partials, docType);
+  const evidenceText = buildEvidenceFromPartials(chunks, partials, MAX_RELEVANT_EVIDENCE);
+  return { aggregated, evidenceText };
+}
+
+function analyzeOne(text, docType){
+  const entities = extractEntities(text);
+  const { currencies, amounts } = extractCurrenciesAndAmounts(text);
+  const dates = extractDates(text);
+  const sentences = splitSentencesSafe(text);
+  const tone = scoreSentiment(text);
+  const kpis = buildKpis(text, amounts, currencies);
+  deriveFinancialsFromAmounts(kpis, amounts);
+  const fh = scoreFinancialHealth(text, kpis, tone, entities);
+  const executiveInsights = buildInsights(kpis, tone, fh, entities);
+  const riskMatrix = buildRisks(text, fh, sentences);
+  const actions = buildActions(text, fh, kpis, riskMatrix);
+  const charts = buildCharts(amounts, kpis);
+  const summary = buildSummary(docType, entities, kpis, fh, tone);
+  const trendInterpretation = interpretTrend(kpis, tone);
+  return { entities, currencies, amounts, dates, tone, kpis, fh, executiveInsights, riskMatrix, actions, charts, summary, trendInterpretation };
+}
+
+function smartChunks(text, budget){
+  const parts = [];
+  const paras = text.split(/\n{2,}/);
+  let buf = "";
+  for (const p of paras){
+    const cand = (buf ? buf + "\n\n" : "") + p;
+    if (cand.length <= budget) { buf = cand; continue; }
+    if (buf) parts.push(buf);
+    if (p.length <= budget){ buf = p; continue; }
+    const sents = p.split(/(?<=[.!?])\s+(?=[A-Z])/g);
+    let sbuf="";
+    for (const s of sents){
+      const c2 = (sbuf? sbuf+" ":"") + s;
+      if (c2.length <= budget){ sbuf=c2; continue; }
+      if (sbuf) parts.push(sbuf);
+      if (s.length <= budget){ sbuf=s; } else {
+        for (let i=0;i<s.length;i+=budget) parts.push(s.slice(i, i+budget));
+        sbuf="";
+      }
+    }
+    if (sbuf) parts.push(sbuf);
+    buf="";
+  }
+  if (buf) parts.push(buf);
+  return parts;
+}
+
+function aggregatePartials(list, docType){
+  const agg = {
+    entities: { parties:[], roles:{ client:[], supplier:[], bank:[], investor:[], regulator:[], other:[] } },
+    currencies: [], amounts: [], dates: [],
+    tone: { score:0, positive:0, negative:0, label:"mixed" },
+    kpis: [], fh: { profitabilityScore:0, liquidityScore:0, concentrationRiskScore:0, anomalyFlags:[], rationale:"" },
+    executiveInsights: [], riskMatrix: [], actions: [],
+    charts: { bars:[], lines:[], pie:[] }, summary: "", trendInterpretation: []
+  };
+  const pushUniq = (arr, v, cap=64) => { if (v==null) return; if (!arr.includes(v)) arr.push(v); if (arr.length>cap) arr.length=cap; };
+
+  for (const p of list){
+    for (const role of Object.keys(agg.entities.roles)){
+      for (const v of (p.entities.roles[role]||[])) pushUniq(agg.entities.roles[role], v, 12);
+    }
+    for (const v of (p.entities.parties||[])) pushUniq(agg.entities.parties, v, 16);
+    for (const c of (p.currencies||[])) pushUniq(agg.currencies, c, 8);
+    agg.amounts = mergeAmounts(agg.amounts, p.amounts);
+    for (const d of (p.dates||[])) pushUniq(agg.dates, d, 24);
+    agg.tone.positive += p.tone.positive||0;
+    agg.tone.negative += p.tone.negative||0;
+    agg.tone.score += p.tone.score||0;
+    agg.kpis = mergeKpis(agg.kpis, p.kpis);
+    agg.fh.profitabilityScore += p.fh.profitabilityScore||0;
+    agg.fh.liquidityScore += p.fh.liquidityScore||0;
+    agg.fh.concentrationRiskScore = Math.max(agg.fh.concentrationRiskScore, p.fh.concentrationRiskScore||0);
+    for (const f of (p.fh.anomalyFlags||[])) pushUniq(agg.fh.anomalyFlags, f, 12);
+    for (const s of (p.executiveInsights||[])) pushUniq(agg.executiveInsights, s, 10);
+    for (const r of (p.riskMatrix||[])) if (agg.riskMatrix.length<12) agg.riskMatrix.push(r);
+    for (const a of (p.actions||[])) if (agg.actions.length<12) agg.actions.push(a);
+  }
+  const n = Math.max(1, list.length);
+  agg.fh.profitabilityScore = Math.round(agg.fh.profitabilityScore/n);
+  agg.fh.liquidityScore = Math.round(agg.fh.liquidityScore/n);
+  agg.tone.label = agg.tone.score>1 ? "positive" : (agg.tone.score<-1 ? "negative" : "mixed");
+  agg.charts = buildCharts(agg.amounts, agg.kpis);
+  agg.summary = buildSummary(docType, agg.entities, agg.kpis, agg.fh, agg.tone);
+  agg.trendInterpretation = interpretTrend(agg.kpis, agg.tone);
+  return agg;
+}
+function mergeAmounts(a, b){
+  const out = [...a];
+  for (const x of (b||[])){
+    const key = `${(x.label||"").toLowerCase()}|${x.currency||""}`;
+    const i = out.findIndex(y=>`${(y.label||"").toLowerCase()}|${y.currency||""}`===key);
+    if (i<0) out.push(x);
+    else if (Math.abs(Number(x.value)||0) > Math.abs(Number(out[i].value)||0)) out[i]=x;
+    if (out.length>40) break;
+  }
+  return out;
+}
+function mergeKpis(a, b){
+  const out = [...a];
+  for (const k of (b||[])){
+    const key = (k.label||"").toLowerCase();
+    const i = out.findIndex(z=>(z.label||"").toLowerCase()===key);
+    if (i<0) out.push(k);
+    else if (isFinite(Number(k.value)) && Math.abs(Number(k.value)) > Math.abs(Number(out[i].value)||0)) out[i]=k;
+    if (out.length>24) break;
+  }
+  return out;
+}
+
+function buildEvidenceText(fullText, kpis, maxLen){
+  const focus = /(total|amount\s*due|revenue|sales|cost|profit|tax|vat|margin|liquidity|ratio|dso|days\s*sales\s*outstanding|growth|grew|increased|rose|up|net|operating|gross)/i;
+  const sents = splitSentencesSafe(fullText);
+  const hits = [];
+  for (const s of sents){ if (focus.test(s)) hits.push(s.trim()); if (hits.length>=400) break; }
+  let evidence = hits.join(" ");
+  if (evidence.length>maxLen) evidence = evidence.slice(0, maxLen);
+  if (evidence.length < Math.min(maxLen, fullText.length)){
+    const head = fullText.slice(0, Math.min(2000, Math.floor(maxLen*0.2)));
+    const tail = fullText.slice(-Math.min(2000, Math.floor(maxLen*0.2)));
+    evidence = (head + "\n" + evidence + "\n" + tail).slice(0, maxLen);
+  }
+  return evidence;
+}
+function buildEvidenceFromPartials(chunks, partials, maxLen){
+  const scored = chunks.map((t,i)=>{
+    const score = ((t.match(/\b(total|amount\s*due|revenue|sales|cost|profit|tax|vat)\b/gi)||[]).length*3) +
+                  ((t.match(/\b(AED|USD|EUR|GBP|SAR|€|\$|£|د\.?إ\.?|درهم)\b/gi)||[]).length*2) +
+                  ((t.match(/\b(margin|liquidity|ratio|dso|grew|growth|increased|rose|up)\b/gi)||[]).length);
+    return { i, score, len: t.length };
+  }).sort((a,b)=>b.score-a.score);
+  let evidence=""; let used=0;
+  for (const s of scored){
+    const piece = chunks[s.i];
+    if (used + piece.length > maxLen) {
+      const remain = maxLen - used;
+      if (remain>500) { evidence += (evidence? "\n\n":"") + piece.slice(0, remain); used += remain; }
+      break;
+    }
+    evidence += (evidence ? "\n\n" : "") + piece;
+    used += piece.length;
+    if (used>=maxLen) break;
+  }
+  return evidence.slice(0, maxLen);
 }

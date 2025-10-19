@@ -1,9 +1,10 @@
-// Executive-grade English analyzer (refined):
-// - No lookbehind; all matchAll use global
-// - Exclude acronyms like DSO/AED from parties
-// - Tight amount extraction (currency or finance keyword or thousands)
-// - Ignore percentages and ratios (1.6x) as amounts
-// - Detect "grew" for growth%
+// Executive-grade English analyzer (refined further):
+// - Reject Q2/quarters & “days” numbers as amounts
+// - Explicit "grew 12%" growth
+// - Flexible "margin near/of/≈ 18%" patterns
+// - Money-only charts (skip ratios/tiny nums)
+// - No lookbehind; all matchAll use /g
+
 export default async function handler(req, res) {
   try {
     res.setHeader("Access-Control-Allow-Origin","*");
@@ -53,17 +54,15 @@ export default async function handler(req, res) {
   }
 }
 
-/* ---------------- utilities ---------------- */
+/* ---------- utils ---------- */
 async function readBody(req){ const chunks=[]; for await (const c of req) chunks.push(c); try{ return JSON.parse(Buffer.concat(chunks).toString("utf8")||"{}"); }catch{ return {}; } }
 function norm(s){ return s.replace(/\u00A0/g,' ').replace(/[ \t]+/g,' ').trim(); }
 function safeStr(s){ return (s==null) ? "" : String(s); }
 function clamp01(x){ const n=Number(x); return isFinite(n)?Math.max(0,Math.min(1,n)):0; }
-function pct(n){ return isFinite(n)?Math.round(n*100)+"%":"-"; }
 function round(v){ return Math.round((Number(v)||0)*100)/100; }
-function fmt(n){ const v=Number(n); return isFinite(v)?new Intl.NumberFormat("en-US",{maximumFractionDigits:2}).format(v):"-"; }
 function capitalize(s){ s=safeStr(s); return s? s[0].toUpperCase()+s.slice(1):s; }
 
-/* ----- SAFE sentence split (no lookbehind) ----- */
+/* sentence split (no lookbehind) */
 function splitSentencesSafe(t){
   const out=[]; let buf="";
   for (let i=0;i<t.length;i++){
@@ -78,7 +77,7 @@ function splitSentencesSafe(t){
   return out;
 }
 
-/* ----- Doc type ----- */
+/* doc type */
 function guessDocType(t){
   const s=t.toLowerCase();
   if (/\binvoice|vat(?:\s|-)invoice|tax invoice\b/.test(s)) return "invoice";
@@ -89,13 +88,11 @@ function guessDocType(t){
   return "document";
 }
 
-/* ----- Entities w/ roles (stoplist for acronyms/currencies) ----- */
-const ENTITY_STOP = new Set([
-  "DSO","AED","USD","EUR","GBP","SAR","VAT","PO","P&L","Q1","Q2","Q3","Q4","KPI","ROI","IRR"
-]);
+/* entities */
+const ENTITY_STOP = new Set(["DSO","AED","USD","EUR","GBP","SAR","VAT","PO","P&L","Q1","Q2","Q3","Q4","KPI","ROI","IRR"]);
 function extractEntities(t){
   const roles = { client:[], supplier:[], bank:[], investor:[], regulator:[], other:[] };
-  const push=(k,v)=>{ v=cleanName(v); if(v && !roles[k].includes(v) && roles[k].length<6) roles[k].push(v); };
+  const push=(k,v)=>{ v=clean(v); if(v && !roles[k].includes(v) && roles[k].length<6) roles[k].push(v); };
   const patt = [
     { role:'client',    rx:/\b(client|customer|buyer|purchaser)\b[:\s\-]*([A-Z][A-Za-z0-9&\-. ]{2,60})/ig },
     { role:'supplier',  rx:/\b(supplier|vendor|seller)\b[:\s\-]*([A-Z][A-Za-z0-9&\-. ]{2,60})/ig },
@@ -104,70 +101,65 @@ function extractEntities(t){
     { role:'regulator', rx:/\b(regulator|authority|ministry|customs|tax|zakat|vat)\b[:\s\-]*([A-Z][A-Za-z0-9&\-. ]{2,60})/ig },
   ];
   for (const p of patt){ let m; while((m=p.rx.exec(t))){ const nm=(m[2]||"").trim(); if (!ENTITY_STOP.has(nm)) push(p.role,nm); } }
-  // Generic ALL-CAPS capture, but filter stopwords and very short tokens
-  (t.match(/\b[A-Z]{3,}(?:\s+[A-Z]{2,})*\b/g)||[])
-    .slice(0,10)
-    .map(v=>v.trim())
-    .filter(v=>v.length>3 && !ENTITY_STOP.has(v))
-    .forEach(v=>roles.other.push(cleanName(v)));
+  (t.match(/\b[A-Z]{3,}(?:\s+[A-Z]{2,})*\b/g)||[]).slice(0,10).map(v=>v.trim())
+    .filter(v=>v.length>3 && !ENTITY_STOP.has(v)).forEach(v=>roles.other.push(clean(v)));
   for (const k of Object.keys(roles)){ roles[k]=[...new Set(roles[k])].filter(x=>x && x.length<=60).slice(0,6); }
   const parties=[...roles.client,...roles.supplier,...roles.other].slice(0,8);
   return { parties, roles };
 }
-function cleanName(s){ return String(s||"").replace(/\s{2,}/g,' ').trim(); }
+function clean(s){ return String(s||"").replace(/\s{2,}/g,' ').trim(); }
 
-/* ----- Money & currencies (tight rules) ----- */
+/* amounts — strict rules */
 function extractCurrenciesAndAmounts(t){
   const curRx={ AED:/(AED|د\.?إ\.?|درهم)/i, USD:/(USD|\$|US\$)/i, EUR:/(EUR|€)/i, GBP:/(GBP|£)/i, SAR:/(SAR|ر\.?س\.?)/i };
   const currencies=[]; for (const c of Object.keys(curRx)) if (curRx[c].test(t)) currencies.push(c);
   const curDefault=currencies[0]||null;
 
-  // Candidates: capture currency (optional) + number, but validate context later
   const rx=/(?:(AED|USD|EUR|GBP|SAR)\s*)?([+-]?\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?|[+-]?\d+(?:\.\d+)?)(?:\s*(AED|USD|EUR|GBP|SAR))?/gi;
   const amounts=[]; let m;
 
   while((m=rx.exec(t))){
-    const numStr = (m[2]||"");
+    const start = m.index || 0;
+    const numStr = m[2]||"";
+    const prevCh = t[start-1] || "";
+    const nextSlice = t.slice(start+numStr.length, start+numStr.length+3);
     const cur = m[1]||m[3]||null;
 
-    // Skip if it's a percentage nearby (within 2 chars) like "12%"
-    const tail = t.slice((m.index||0) + numStr.length, (m.index||0) + numStr.length + 2);
-    if (/%/.test(tail)) continue;
+    // reject if number is adjacent to a letter (e.g., "Q2", "FY2025")
+    if (/[A-Za-z]/.test(prevCh)) continue;
 
-    // Skip ratios like "1.6x" (x immediately after)
-    if (/^\s*x\b/i.test(tail)) continue;
+    // reject if immediately followed by %, or 'x' ratio
+    if (/^\s*[%x]\b/i.test(nextSlice)) continue;
 
-    // Parse numeric
+    // parse numeric
     const val = Number(numStr.replace(/[\s,]/g,''));
     if (!isFinite(val) || Math.abs(val)===0) continue;
 
-    // Keyword window around the match
-    const W=56;
-    const around=t.slice(Math.max(0,m.index-W), Math.min(t.length, (m.index||0)+numStr.length+W)).toLowerCase();
+    const W=64;
+    const around=t.slice(Math.max(0,start-W), Math.min(t.length, start+numStr.length+W)).toLowerCase();
+
+    // if time unit / DSO context nearby, skip (unless explicit currency)
+    const timeLike = /\b(day|days|week|weeks|month|months|quarter|q1|q2|q3|q4)\b/.test(around) || /\bdso\b/.test(around);
+    if (!cur && timeLike) continue;
+
+    // finance keyword context
     const hasKeyword = /(total|grand\s*total|amount\s*due|revenue|sales|cost|cogs|expense|tax|vat|payment|balance|profit)/.test(around);
 
-    // Thousands-style number (likely money)
+    // numeric shape hints
     const looksThousands = /(\d{1,3}[,\s]\d{3})/.test(numStr);
 
-    // Acceptance rules:
-    //  - currency present, OR
-    //  - near finance keyword, OR
-    //  - looks like thousands (1,234), OR
-    //  - |value| >= 1000
-    const accept = !!(cur || hasKeyword || looksThousands || Math.abs(val)>=1000);
+    // final acceptance
+    const accept = !!(cur || looksThousands || Math.abs(val)>=1000 || (hasKeyword && !timeLike && Math.abs(val)>=10));
     if (!accept) continue;
 
-    // Currency: prefer explicit; else default if there is any currency in doc
     const finalCur = cur || curDefault;
-
-    amounts.push({ label: inferAmountLabel(t,m.index), value: val, currency: finalCur });
+    amounts.push({ label: inferAmountLabel(t,start), value: val, currency: finalCur });
     if (amounts.length>40) break;
   }
-
   return { currencies:[...new Set(currencies)], amounts };
 }
 function inferAmountLabel(t, idx){
-  const W=48; const around=t.slice(Math.max(0,idx-W), Math.min(t.length, idx+W)).toLowerCase();
+  const W=50; const around=t.slice(Math.max(0,idx-W), Math.min(t.length, idx+W)).toLowerCase();
   if (/grand\s*total|amount\s*due|total\b/.test(around)) return "Total";
   if (/\brevenue|sales\b/.test(around)) return "Revenue";
   if (/\bcost|cogs|expense\b/.test(around)) return "Cost";
@@ -178,7 +170,7 @@ function inferAmountLabel(t, idx){
   return "Amount";
 }
 
-/* ----- Dates ----- */
+/* dates */
 function extractDates(t){
   const out=[];
   (t.match(/\b(20\d{2})[-\/.](0?[1-9]|1[0-2])[-\/.](0?[1-9]|[12]\d|3[01])\b/g)||[]).forEach(d=>out.push(d));
@@ -187,36 +179,56 @@ function extractDates(t){
   return [...new Set(out)].slice(0,12);
 }
 
-/* ----- Sentiment ----- */
+/* sentiment */
 function scoreSentiment(t){
   const P=['growth','grew','increase','improved','record','strong','resilient','profitable','surplus','beat'];
   const N=['decline','decrease','fell','worsened','loss','delay','overdue','default','penalty','risk','pressure','shortfall','spike'];
-  const p=countWords(t,P), n=countWords(t,N); const score=p-n;
+  const p=(t.match(new RegExp('\\b(' + P.join('|') + ')\\b','gi'))||[]).length;
+  const n=(t.match(new RegExp('\\b(' + N.join('|') + ')\\b','gi'))||[]).length;
+  const score=p-n;
   return { score, positive:p, negative:n, label: score>1?'positive':score<-1?'negative':'mixed' };
 }
-function countWords(t,arr){ const rx=new RegExp('\\b(' + arr.join('|') + ')\\b','gi'); return (t.match(rx)||[]).length; }
 
-/* ----- matchAll helpers to force /g flag ----- */
+/* helpers for matchAll with /g */
 function allMatches(t, rx){
   const flags = rx.flags.includes('g') ? rx.flags : (rx.flags + 'g');
   const g = new RegExp(rx.source, flags);
   return [...t.matchAll(g)];
 }
+function distanceToKeyword(t, idx, rx){
+  const m = allMatches(t, rx);
+  let d=1e9; for (const mm of m){ const i=mm.index||0; const dd=Math.abs(i-idx); if (dd<d) d=dd; }
+  return m.length?d:1e9;
+}
 
-/* ----- KPIs & derivations ----- */
+/* KPIs */
 function buildKpis(text, amounts, currencies){
   const k=[];
 
-  // Growth: also consider "grew"
-  const growthPct = findPercentNear(text, /(growth|grew|revenue|sales|topline)/i);
-  if (growthPct!=null) k.push({ label:"Revenue Growth %", value: Number(growthPct), unit:"%" });
+  // Growth: explicit "grew 12%" (or "grew by 12%")
+  const grew = text.match(/\bgrew(?:\s+by)?\s+([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/i);
+  if (grew) k.push({ label:"Revenue Growth %", value:Number(grew[1]), unit:"%" });
+  else {
+    // fallback: percent nearest to growth words
+    const growthPct = findPercentNear(text, /(growth|revenue|sales|topline)/i);
+    if (growthPct!=null) k.push({ label:"Revenue Growth %", value: Number(growthPct), unit:"%" });
+  }
 
-  const marginMatch = text.match(/\b(\d{1,2}(?:\.\d{1,2})?)\s*%?\s*(?:net|operating|gross)?\s*margin\b/i);
-  if (marginMatch) k.push({ label:"Margin %", value:Number(marginMatch[1]), unit:"%" });
+  // Margin: support "18% margin" OR "margin near/of/about ≈ 18%"
+  const m1 = text.match(/\b([0-9]{1,2}(?:\.\d{1,2})?)\s*%\s*(?:net|operating|gross)?\s*margin\b/i);
+  const m2 = text.match(/\bmargin(?:\s*(?:near|around|about|of|≈|~=|=)\s*|\s+)([0-9]{1,2}(?:\.\d{1,2})?)\s*%/i);
+  const marginPct = m1 ? Number(m1[1]) : (m2 ? Number(m2[1]) : null);
+  if (marginPct!=null) k.push({ label:"Margin %", value: marginPct, unit:"%" });
 
+  // Liquidity ratio: if explicit "current/quick ratio 1.6", otherwise hint with "~1.6x" near liquidity words
   const liqMatch = text.match(/\b(current|quick)\s*ratio[:\s]*([0-9]+(?:\.[0-9]+)?)\b/i);
   if (liqMatch) k.push({ label:"Liquidity Ratio", value:Number(liqMatch[2]), unit:"x" });
+  else {
+    const liqHint = text.match(/\bliquidity[^.]{0,24}?([0-9]+(?:\.[0-9]+)?)\s*x\b/i);
+    if (liqHint) k.push({ label:"Liquidity Ratio", value:Number(liqHint[1]), unit:"x" });
+  }
 
+  // DSO / receivables
   const dso = findNumberNear(text, /(dso|days\s*sales\s*outstanding|receivable[s]?\s*days)/i);
   if (dso!=null) k.push({ label:"DSO (days)", value:Number(dso), unit:"d" });
 
@@ -230,18 +242,6 @@ function buildKpis(text, amounts, currencies){
   for (const item of k){ const key=item.label.toLowerCase(); if (seen.has(key)) continue; seen.add(key); out.push(item); }
   return out.slice(0,16);
 }
-function deriveFinancialsFromAmounts(kpis, amounts){
-  const rev = pickLargest(amounts.filter(a=>/revenue|sales/i.test(a.label)));
-  const cost = pickLargest(amounts.filter(a=>/cost|cogs|expense/i.test(a.label)));
-  const prof = pickLargest(amounts.filter(a=>/profit\b/i.test(a.label)));
-  if (!hasKpi(kpis,'Revenue') && rev) kpis.push({ label:'Revenue', value:Math.abs(rev.value), unit: rev.currency||'' });
-  if (!hasKpi(kpis,'Cost') && cost) kpis.push({ label:'Cost', value:Math.abs(cost.value), unit: cost.currency||'' });
-  let marginPct=null;
-  if (prof && rev && rev.value) marginPct=(prof.value/rev.value)*100;
-  if (marginPct!=null && isFinite(marginPct) && !hasKpi(kpis,'Margin %')) kpis.push({ label:'Margin %', value: round(marginPct), unit:'%' });
-}
-function hasKpi(list, label){ return list.some(k=>k.label.toLowerCase()===label.toLowerCase()); }
-function pickLargest(arr){ return arr.length? arr.sort((a,b)=>Math.abs(b.value)-Math.abs(a.value))[0] : null; }
 function findPercentNear(t, nearRx){
   const perc = allMatches(t, /\b([+-]?\d{1,3}(?:\.\d+)?)\s*%\b/g);
   if (!perc.length) return null;
@@ -262,13 +262,22 @@ function findNumberNear(t, nearRx){
   }
   const v=Number(best?.[1]); return isFinite(v)?v:null;
 }
-function distanceToKeyword(t, idx, rx){
-  const m = allMatches(t, rx);
-  let d=1e9; for (const mm of m){ const i=mm.index||0; const dd=Math.abs(i-idx); if (dd<d) d=dd; }
-  return m.length?d:1e9;
-}
 
-/* ----- Health, Insights, Risks, Actions ----- */
+/* derivations */
+function deriveFinancialsFromAmounts(kpis, amounts){
+  const rev = pickLargest(amounts.filter(a=>/revenue|sales/i.test(a.label)));
+  const cost = pickLargest(amounts.filter(a=>/cost|cogs|expense/i.test(a.label)));
+  const prof = pickLargest(amounts.filter(a=>/profit\b/i.test(a.label)));
+  if (!hasKpi(kpis,'Revenue') && rev) kpis.push({ label:'Revenue', value:Math.abs(rev.value), unit: rev.currency||'' });
+  if (!hasKpi(kpis,'Cost') && cost) kpis.push({ label:'Cost', value:Math.abs(cost.value), unit: cost.currency||'' });
+  let marginPct=null;
+  if (prof && rev && rev.value) marginPct=(prof.value/rev.value)*100;
+  if (marginPct!=null && isFinite(marginPct) && !hasKpi(kpis,'Margin %')) kpis.push({ label:'Margin %', value: round(marginPct), unit:'%' });
+}
+function hasKpi(list, label){ return list.some(k=>k.label.toLowerCase()===label.toLowerCase()); }
+function pickLargest(arr){ return arr.length? arr.sort((a,b)=>Math.abs(b.value)-Math.abs(a.value))[0] : null; }
+
+/* health, insights, risks, actions (unchanged from last good version) */
 function scoreFinancialHealth(text, kpis, tone, entities){
   const growth = (kpis.find(k=>/growth/i.test(k.label))?.value) ?? (tone.score>0?8:(tone.score<0?-6:0));
   const margin = (kpis.find(k=>/margin/i.test(k.label))?.value) ?? (tone.score>0?20:12);
@@ -295,7 +304,6 @@ function scoreFinancialHealth(text, kpis, tone, entities){
 
   return { profitabilityScore, liquidityScore, concentrationRiskScore, anomalyFlags, rationale };
 }
-
 function buildInsights(kpis, tone, fh, entities){
   const bullets=[];
   const gr=kpis.find(k=>/growth/i.test(k.label)); const mg=kpis.find(k=>/margin/i.test(k.label)); const li=kpis.find(k=>/liquidity/i.test(k.label));
@@ -336,9 +344,10 @@ function buildActions(text, fh, kpis, risks){
   return ded.slice(0,10);
 }
 
-/* ----- Charts ----- */
+/* charts — money only */
 function buildCharts(amounts, kpis){
-  const bars=[...amounts].sort((a,b)=>Math.abs(b.value)-Math.abs(a.value)).slice(0,6)
+  const money = amounts.filter(a => Math.abs(a.value)>=10 || a.currency); // skip tiny ratios
+  const bars=[...money].sort((a,b)=>Math.abs(b.value)-Math.abs(a.value)).slice(0,6)
     .map(a=>({ label:(a.label||"Amt").slice(0,12), value:Math.abs(Number(a.value)||0) }));
 
   const growth=kpis.find(k=>/growth/i.test(k.label))?.value ?? 0;
@@ -346,8 +355,8 @@ function buildCharts(amounts, kpis){
   const lines=makeTrend(6,base,growth).map((y,i)=>({ x:MONTHS[i%12], y:Math.round(y) }));
 
   let pie=[];
-  if (amounts.length){
-    const byCur={}; for (const a of amounts){ const c=a.currency||"UNK"; byCur[c]=(byCur[c]||0)+Math.abs(Number(a.value)||0); }
+  if (money.length){
+    const byCur={}; for (const a of money){ const c=a.currency||"UNK"; byCur[c]=(byCur[c]||0)+Math.abs(Number(a.value)||0); }
     pie=Object.entries(byCur).map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value).slice(0,8);
   }
   return { bars, lines, pie };
@@ -355,7 +364,7 @@ function buildCharts(amounts, kpis){
 function makeTrend(n, base, gPct){ const out=[]; let v=base; const step=(Number(gPct)||0)/Math.max(1,(n-1)); for(let i=0;i<n;i++){ out.push(Math.max(1,v)); v=v*(1+step/100); } return out; }
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-/* ----- Summary & Confidence ----- */
+/* summary & confidence */
 function buildSummary(docType, entities, kpis, fh, tone){
   const gr = kpis.find(k=>/growth/i.test(k.label))?.value;
   const mg = kpis.find(k=>/margin/i.test(k.label))?.value;

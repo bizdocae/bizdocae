@@ -1,147 +1,64 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>BizDoc — Analyzer & Downloads</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <style>
-    :root{--w:860px;}
-    *{box-sizing:border-box}
-    body{font-family:ui-sans-serif,system-ui,Arial;margin:0;display:flex;justify-content:center;background:#fafafa;color:#111}
-    header{background:#111;color:#fff;padding:16px 20px;display:flex;justify-content:center}
-    header .inner{width:min(100%,var(--w));display:flex;align-items:center;gap:12px}
-    header h1{font-size:18px;margin:0}
-    main{width:min(100%,var(--w));padding:22px}
-    .card{background:#fff;border:1px solid #eee;border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-    label{display:block;margin:12px 0 6px;font-weight:600}
-    input[type="text"], textarea{width:100%;padding:10px;font-size:16px;border:1px solid #ddd;border-radius:10px;background:#fff}
-    textarea{height:220px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
-    button{padding:12px 16px;font-size:15px;border:0;border-radius:10px;cursor:pointer}
-    .btn{background:#111;color:#fff}
-    .btn.secondary{background:#f1f5f9;color:#111}
-    .btn.info{background:#e0f2fe;color:#111}
-    .btn.warn{background:#fde68a;color:#111}
-    small.muted{color:#666}
-    .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;font-size:12px;border:1px solid #e5e7eb;background:#fff}
-    .hidden{display:none}
-    .grid{display:grid;grid-template-columns:1fr;gap:16px}
-    @media(min-width:800px){ .grid{grid-template-columns:1fr 1fr} }
-    .footer{color:#666;font-size:12px;margin-top:10px}
-  </style>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BizDoc OCR</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 16px;}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+input,select,button,textarea{font-size:16px;padding:10px;}
+input,select,button{height:44px;}
+button{cursor:pointer;border:1px solid #ccc;border-radius:10px;background:#111;color:#fff}
+button:disabled{opacity:.6;cursor:not-allowed}
+.muted{color:#666;font-size:14px}
+textarea{width:100%;height:280px;white-space:pre-wrap;}
+label{font-weight:600}
+</style>
 </head>
 <body>
-  <header><div class="inner"><div class="pill">BizDoc</div><h1>Analyzer & Downloads</h1></div></header>
-  <main>
+<h1>BizDoc OCR</h1>
+<p class="muted">Paste a PDF/Image URL (supports Arabic + English). Choose a language or keep <b>Auto</b>.</p>
+<div class="row">
+  <input id="fileUrl" type="url" placeholder="https://example.com/file.pdf or .jpg" style="flex:1;min-width:260px" />
+  <select id="language">
+    <option value="auto">Auto (Engine 2)</option>
+    <option value="ara">Arabic (ara)</option>
+    <option value="eng">English (eng)</option>
+  </select>
+</div>
+<div class="row" style="margin-top:10px">
+  <button id="btnJson">Analyze (JSON)</button>
+  <button id="btnPdf">Analyze & Download PDF</button>
+  <label style="margin-left:12px"><input id="hideText" type="checkbox" checked /> Hide text layer in PDF</label>
+</div>
+<p class="muted" id="status" style="margin-top:10px;"></p>
+<label for="output" style="display:block;margin-top:14px;">Extracted Text (preview):</label>
+<textarea id="output" placeholder="Result text will appear here…"></textarea>
+<script>
+const q=s=>document.querySelector(s);
+const fileUrl=q('#fileUrl'),language=q('#language'),hideText=q('#hideText');
+const statusEl=q('#status'),out=q('#output'),btnJson=q('#btnJson'),btnPdf=q('#btnPdf');
+function busy(b){btnJson.disabled=b;btnPdf.disabled=b;statusEl.textContent=b?'Processing…':'';}
 
-    <!-- Upload -->
-    <div class="card">
-      <h2>1) Upload document (optional)</h2>
-      <p class="footer">Accepted: <b>TXT</b>, <b>DOCX</b>, <b>PDF</b> (PDF text requires OCR to extract; otherwise a placeholder is used).</p>
-      <div class="row">
-        <input type="file" id="file" />
-        <button class="btn secondary" id="btnUpload">Upload & Preview</button>
-        <div id="uploadStatus" class="pill hidden"></div>
-      </div>
-    </div>
+btnJson.addEventListener('click',async()=>{
+  const url=fileUrl.value.trim();if(!url)return alert('Please paste a file URL first.');busy(true);
+  try{
+    const resp=await fetch('/api/ocr-ocrspace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,language:language.value,wantText:true,wantSearchablePdf:true})});
+    const data=await resp.json();if(!resp.ok||!data.ok)throw new Error(data.error||'OCR failed');
+    out.value=data.text||'';statusEl.textContent=data.pdfUrl?'Searchable PDF created (temporary). Use the PDF button to download.':'Done.';
+  }catch(e){out.value='';statusEl.textContent='Error: '+e.message;}finally{busy(false);}
+});
 
-    <!-- Inputs -->
-    <div class="grid">
-      <div class="card">
-        <h2>2) Set filename & title</h2>
-        <label for="filename">Filename (no extension)</label>
-        <input id="filename" type="text" value="report"/>
-        <label for="title">Title</label>
-        <input id="title" type="text" value="BizDoc Report"/>
-        <p class="footer">Extensions are added automatically based on format.</p>
-      </div>
-
-      <div class="card">
-        <h2>3) Preview / Body</h2>
-        <label for="body">Body text</label>
-        <textarea id="body">Hello from BizDoc.</textarea>
-        <div class="footer" id="detectedHint"><small class="muted">Tip: Upload a file to auto-fill this area.</small></div>
-      </div>
-    </div>
-
-    <!-- Downloads -->
-    <div class="card">
-      <h2>4) Download</h2>
-      <div class="row">
-        <button class="btn" id="btnTxt">Download TXT</button>
-        <button class="btn info" id="btnDocx">Download DOCX</button>
-        <button class="btn warn" id="btnPdf">Download PDF</button>
-      </div>
-      <p class="footer">Generated via <code>/api/download-get</code> (CORS enabled, no-store).</p>
-    </div>
-
-    <!-- ANALYSIS -->
-    <div class="card">
-      <h2>5) AI Analysis</h2>
-      <label for="instruction">Instruction (optional)</label>
-      <input id="instruction" type="text" value="Executive summary + key findings + risks + one KPI bar chart"/>
-      <div class="row">
-        <button class="btn secondary" id="btnAnalyze">Analyze</button>
-        <button class="btn warn" id="btnDownloadFromAnalysis" disabled>Download PDF (from analysis)</button>
-      </div>
-      <p class="footer">Analysis JSON</p>
-      <textarea id="analysisJson">{}</textarea>
-    </div>
-
-    <p class="footer">Runtime: Node 20 LTS · Downloads: <code>Cache-Control: no-store</code></p>
-  </main>
-
-  <script>
-    const APP = 'https://bizdoc-min.vercel.app'; // change if different
-    const el = s => document.querySelector(s);
-    const show = (n, yes) => el(n).classList.toggle('hidden', !yes);
-    const analysisState = { json: null };
-
-    async function postAndDownload(payload) {
-      const r = await fetch(`${APP}/api/download-get`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if (!r.ok) { alert('Failed: '+await r.text()); return; }
-      const b = await r.blob(); const url = URL.createObjectURL(b);
-      const a = document.createElement('a'); a.href = url; a.download = payload.filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    }
-    function vals(){ const base=(el('#filename').value||'report').trim(); const title=el('#title').value||'BizDoc Report'; const body=el('#body').value||''; return {base,title,body}; }
-
-    // Upload → Preview
-    el('#btnUpload').addEventListener('click', async () => {
-      const f = el('#file').files[0]; if(!f){ alert('Select a file first.'); return; }
-      const fd = new FormData(); fd.append('file', f); fd.append('filename', el('#filename').value||'report'); fd.append('title', el('#title').value||'BizDoc Report');
-      show('#uploadStatus', true); el('#uploadStatus').textContent = 'Uploading…';
-      try {
-        const r = await fetch(`${APP}/api/upload`, { method:'POST', body: fd }); const j = await r.json();
-        if(!j.ok) throw new Error(j.error||'Upload failed');
-        el('#body').value = j.body || ''; el('#detectedHint').innerHTML = `<small class="muted">Detected: <b>${j.detected||'unknown'}</b></small>`;
-        el('#uploadStatus').textContent='✓ Uploaded'; el('#uploadStatus').style.borderColor='#10b981'; el('#uploadStatus').style.color='#10b981';
-      } catch(e){ el('#uploadStatus').textContent='× Error'; el('#uploadStatus').style.borderColor='#b91c1c'; el('#uploadStatus').style.color='#b91c1c'; alert(e.message||e); }
-    });
-
-    // Download buttons
-    el('#btnTxt').addEventListener('click', () => { const {base,title,body}=vals(); postAndDownload({type:'txt', filename: base.endsWith('.txt')?base:base+'.txt', title, body}); });
-    el('#btnDocx').addEventListener('click', () => { const {base,title,body}=vals(); postAndDownload({type:'docx', filename: base.endsWith('.docx')?base:base+'.docx', title, body}); });
-    el('#btnPdf').addEventListener('click', () => { const {base,title,body}=vals(); postAndDownload({type:'pdf', filename: base.endsWith('.pdf')?base:base+'.pdf', title, body}); });
-
-    // Analyze
-    async function analyzeNow(){
-      const title = el('#title').value || 'BizDoc Report';
-      const body  = el('#body').value || '';
-      const instruction = el('#instruction').value || '';
-      const r = await fetch(`${APP}/api/analyze`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title, body, instruction})});
-      const j = await r.json(); if(!j.ok) throw new Error(j.error||'Analyze failed');
-      analysisState.json = j.analysis || {};
-      el('#analysisJson').value = JSON.stringify(analysisState.json, null, 2);
-      el('#btnDownloadFromAnalysis').disabled = false;
-    }
-    el('#btnAnalyze').addEventListener('click', async ()=>{ try{ await analyzeNow(); }catch(e){ alert(e.message||e); }});
-    el('#btnDownloadFromAnalysis').addEventListener('click', async ()=>{
-      if(!analysisState.json){ alert('Run Analyze first.'); return; }
-      const title = el('#title').value || 'BizDoc Report';
-      const filenameBase = (el('#filename').value || 'report').trim();
-      await postAndDownload({ type:'pdf', filename: filenameBase.endsWith('.pdf')?filenameBase:filenameBase+'.pdf', title, analysis: analysisState.json });
-    });
-  </script>
+btnPdf.addEventListener('click',async()=>{
+  const url=fileUrl.value.trim();if(!url)return alert('Please paste a file URL first.');busy(true);
+  try{
+    const resp=await fetch('/api/ocr-ocrspace-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,language:language.value,hideText:hideText.checked})});
+    if(!resp.ok){const err=await safeJson(resp);throw new Error(err?.error||('HTTP '+resp.status));}
+    const blob=await resp.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ocr.pdf';
+    document.body.appendChild(a);a.click();URL.revokeObjectURL(a.href);a.remove();statusEl.textContent='Downloaded.';
+  }catch(e){statusEl.textContent='Error: '+e.message;}finally{busy(false);}
+});
+async function safeJson(r){try{return await r.json();}catch{return null;}}
+</script>
 </body>
-<script>fetch('/api/version').then(r=>r.json()).then(v=>{const el=document.createElement('div');el.style.cssText='text-align:center;margin-top:40px;padding:10px;font-size:12px;color:#777';const c=v.env==='production'?'#059669':(v.env==='preview'?'#ca8a04':'#6b7280');el.innerHTML=`<hr style='margin:16px 0;border:none;border-top:1px solid #eee'><div><strong>Env:</strong> <span style='color:${c}'>${v.env}</span></div><div><strong>Branch:</strong> ${v.branch}</div><div><strong>Commit:</strong> ${String(v.commit||'').slice(0,7)}</div><div><strong>Deployed:</strong> ${new Date(v.deployedAt).toLocaleString()}</div>`;document.body.appendChild(el)}).catch(()=>console.warn('Version info unavailable'));</script>
 </html>

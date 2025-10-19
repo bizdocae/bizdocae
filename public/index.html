@@ -37,20 +37,21 @@ small{color:#666}
 <div class="row" style="margin-top:12px">
   <button id="btnJson">Analyze (JSON)</button>
   <button id="btnPdf">Analyze & Download PDF</button>
+  <button id="btnBizDoc">Analyze with AI (BizDoc)</button>
   <label style="margin-left:12px"><input id="hideText" type="checkbox" checked /> Hide text layer in PDF</label>
 </div>
 
 <p class="muted" id="status" style="margin-top:10px;"></p>
 
-<label for="output" style="display:block;margin-top:14px;">Extracted Text (preview):</label>
-<textarea id="output" placeholder="Result text will appear here…"></textarea>
+<label for="output" style="display:block;margin-top:14px;">Output (OCR text or BizDoc JSON):</label>
+<textarea id="output" placeholder="Result will appear here…"></textarea>
 
 <script>
 const qs = s => document.querySelector(s);
 const fileInput = qs('#fileLocal'), urlInput = qs('#fileUrl'), lang = qs('#language'), hideText = qs('#hideText');
-const btnJson = qs('#btnJson'), btnPdf = qs('#btnPdf'), statusEl = qs('#status'), out = qs('#output');
+const btnJson = qs('#btnJson'), btnPdf = qs('#btnPdf'), btnBizDoc = qs('#btnBizDoc'), statusEl = qs('#status'), out = qs('#output');
 
-function busy(b){ btnJson.disabled=b; btnPdf.disabled=b; statusEl.textContent = b ? 'Processing…' : ''; }
+function busy(b){ btnJson.disabled=b; btnPdf.disabled=b; btnBizDoc.disabled=b; statusEl.textContent = b ? 'Processing…' : ''; }
 
 btnJson.addEventListener('click', async () => {
   busy(true);
@@ -59,7 +60,6 @@ btnJson.addEventListener('click', async () => {
     const language = lang.value;
 
     if (file) {
-      // Local file → send base64 JSON to upload endpoint
       const {b64,mime} = await toBase64(file);
       const resp = await fetch('/api/ocr-ocrspace-upload', {
         method: 'POST',
@@ -73,7 +73,6 @@ btnJson.addEventListener('click', async () => {
       return;
     }
 
-    // Fallback: URL flow
     const url = urlInput.value.trim();
     if (!url) return alert('Select a file OR paste a URL.');
     const resp = await fetch('/api/ocr-ocrspace', {
@@ -137,6 +136,50 @@ btnPdf.addEventListener('click', async () => {
   }
 });
 
+btnBizDoc.addEventListener('click', async () => {
+  busy(true);
+  try {
+    const language = lang.value;
+    let text = '';
+    const file = fileInput.files && fileInput.files[0];
+
+    if (file) {
+      const {b64,mime} = await toBase64(file);
+      const ocr = await fetch('/api/ocr-ocrspace-upload', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ fileB64:b64, filename:file.name, mime, language, wantText:true, wantSearchablePdf:false })
+      }).then(r=>r.json());
+      if (!ocr?.ok) throw new Error(ocr?.error || 'OCR failed');
+      text = ocr.text || '';
+    } else {
+      const url = urlInput.value.trim();
+      if (!url) { alert('Select a file OR paste a URL.'); busy(false); return; }
+      const ocr = await fetch('/api/ocr-ocrspace', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ url, language, wantText:true, wantSearchablePdf:false })
+      }).then(r=>r.json());
+      if (!ocr?.ok) throw new Error(ocr?.error || 'OCR failed');
+      text = ocr.text || '';
+    }
+
+    if (!text) throw new Error('No text extracted from OCR.');
+
+    const biz = await fetch('/api/analyze-bizdoc', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text, languageIn:'auto', languageOut: (language==='ara'?'ara':'eng') })
+    }).then(r=>r.json());
+
+    if (!biz?.ok) throw new Error(biz?.error || 'BizDoc analysis failed');
+
+    out.value = JSON.stringify(biz.analysis, null, 2);
+    statusEl.textContent = 'BizDoc analysis complete.';
+  } catch(e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  } finally {
+    busy(false);
+  }
+});
+
 function forceDownload(blob, name){
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
@@ -144,7 +187,6 @@ function forceDownload(blob, name){
   document.body.appendChild(a); a.click();
   URL.revokeObjectURL(a.href); a.remove();
 }
-
 async function toBase64(file){
   const buff = await file.arrayBuffer();
   const b64 = btoa(String.fromCharCode(...new Uint8Array(buff)));

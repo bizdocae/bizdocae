@@ -1,5 +1,2 @@
 export const config = { runtime: "nodejs" };
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.status(200).json({ ok: true, time: new Date().toISOString() });
-}
+export default (req, res) => res.status(200).json({ ok: true, t: Date.now() });

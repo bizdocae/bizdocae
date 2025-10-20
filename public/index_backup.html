@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BizDoc OCR</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 16px;}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+input,select,button,textarea{font-size:16px;padding:10px;}
+input,select,button{height:44px;}
+button{cursor:pointer;border:1px solid #ccc;border-radius:10px;background:#111;color:#fff}
+button:disabled{opacity:.6;cursor:not-allowed}
+.muted{color:#666;font-size:14px}
+textarea{width:100%;height:280px;white-space:pre-wrap;}
+label{font-weight:600}
+small{color:#666}
+</style>
+</head>
+<body>
+<h1>BizDoc OCR</h1>
+<p class="muted">Upload a local PDF/Image or paste a URL. Language can be <b>Auto</b> (Engine 2) or forced.</p>
+
+<div class="row">
+  <input id="fileLocal" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp" />
+  <small>Max size depends on plan; prefer clear scans.</small>
+</div>
+
+<div class="row" style="margin-top:6px">
+  <input id="fileUrl" type="url" placeholder="Or paste: https://example.com/file.pdf or .jpg" style="flex:1;min-width:260px" />
+  <select id="language">
+    <option value="auto">Auto (Engine 2)</option>
+    <option value="ara">Arabic (ara)</option>
+    <option value="eng">English (eng)</option>
+  </select>
+  <select id="aiOut">
+    <option value="eng">AI Output: English</option>
+    <option value="ara">AI Output: Arabic</option>
+  </select>
+</div>
+
+<div class="row" style="margin-top:12px">
+  <button id="btnJson">Analyze (JSON)</button>
+  <button id="btnPdf">Analyze & Download PDF</button>
+  <button id="btnBizDoc">Analyze with AI (BizDoc)</button>
+  <button id="btnReport">Download AI Report (PDF)</button>
+  <label style="margin-left:12px"><input id="hideText" type="checkbox" checked /> Hide text layer in PDF</label>
+</div>
+
+<p class="muted" id="status" style="margin-top:10px;"></p>
+
+<label for="output" style="display:block;margin-top:14px;">Output (OCR text or BizDoc JSON):</label>
+<textarea id="output" placeholder="Result will appear here…"></textarea>
+
+<script>
+const qs = s => document.querySelector(s);
+const fileInput = qs('#fileLocal'), urlInput = qs('#fileUrl'), lang = qs('#language'), aiOut = qs('#aiOut'), hideText = qs('#hideText');
+const btnJson = qs('#btnJson'), btnPdf = qs('#btnPdf'), btnBizDoc = qs('#btnBizDoc'), btnReport = qs('#btnReport');
+const statusEl = qs('#status'), out = qs('#output');
+
+function busy(b){ [btnJson,btnPdf,btnBizDoc,btnReport].forEach(x=>x.disabled=b); statusEl.textContent = b ? 'Processing…' : ''; }
+
+btnJson.addEventListener('click', runOcrJson);
+btnPdf.addEventListener('click', runOcrPdf);
+btnBizDoc.addEventListener('click', async()=>{ busy(true); try{ const a = await getBizAnalysis(); out.value = JSON.stringify(a, null, 2); statusEl.textContent='BizDoc analysis complete.'; }catch(e){ statusEl.textContent='Error: '+e.message; } finally{ busy(false);} });
+btnReport.addEventListener('click', runReportPdf);
+
+/* ---------- core helpers ---------- */
+
+async function getOcrText(language){
+  const file = fileInput.files && fileInput.files[0];
+  if (file) {
+    const {b64,mime} = await toBase64(file);
+    const resp = await fetch('/api/ocr-ocrspace-upload', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ fileB64:b64, filename:file.name, mime, language, wantText:true, wantSearchablePdf:false })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'OCR failed');
+    return data.text || '';
+  } else {
+    const url = urlInput.value.trim();
+    if (!url) throw new Error('Select a file OR paste a URL.');
+    const resp = await fetch('/api/ocr-ocrspace', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url, language, wantText:true, wantSearchablePdf:false })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'OCR failed');
+    return data.text || '';
+  }
+}
+
+async function getBizAnalysis(){
+  const language = lang.value;
+  const outLang = aiOut.value;
+  // 1) OCR
+  const text = await getOcrText(language);
+  if (!text) throw new Error('No text extracted from OCR.');
+  // 2) AI analysis
+  const resp = await fetch('/api/analyze-bizdoc', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ text, languageIn:'auto', languageOut: outLang })
+  });
+  const biz = await resp.json();
+  if (!resp.ok || !biz?.ok) throw new Error(biz?.error || 'BizDoc analysis failed');
+  return biz.analysis;
+}
+
+/* ---------- buttons ---------- */
+
+async function runOcrJson(){
+  busy(true);
+  try {
+    const language = lang.value;
+    const file = fileInput.files && fileInput.files[0];
+    if (file) {
+      const {b64,mime} = await toBase64(file);
+      const resp = await fetch('/api/ocr-ocrspace-upload',{ method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ fileB64:b64, filename:file.name, mime, language, wantText:true, wantSearchablePdf:true })});
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || 'OCR failed');
+      out.value = data.text || '';
+      statusEl.textContent = data.pdfUrl ? 'Searchable PDF created (temporary).' : 'Done.';
+      return;
+    }
+    const url = urlInput.value.trim();
+    if (!url) throw new Error('Select a file OR paste a URL.');
+    const resp = await fetch('/api/ocr-ocrspace',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url, language, wantText:true, wantSearchablePdf:true })});
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'OCR failed');
+    out.value = data.text || '';
+    statusEl.textContent = data.pdfUrl ? 'Searchable PDF created (temporary).' : 'Done.';
+  } catch(e){ out.value=''; statusEl.textContent='Error: '+e.message; } finally { busy(false); }
+}
+
+async function runOcrPdf(){
+  busy(true);
+  try {
+    const language = lang.value;
+    const file = fileInput.files && fileInput.files[0];
+    if (file) {
+      const {b64,mime} = await toBase64(file);
+      const resp = await fetch('/api/ocr-ocrspace-upload-pdf',{ method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ fileB64:b64, filename:file.name, mime, language, hideText: hideText.checked })});
+      if (!resp.ok) { let err=null; try{err=await resp.json();}catch{} throw new Error((err && err.error)||('HTTP '+resp.status)); }
+      const blob = await resp.blob(); forceDownload(blob, file.name.replace(/\.[^.]+$/,'') + '.pdf'); statusEl.textContent='Downloaded.'; return;
+    }
+    const url = urlInput.value.trim();
+    if (!url) throw new Error('Select a file OR paste a URL.');
+    const resp = await fetch('/api/ocr-ocrspace-pdf',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url, language, hideText: hideText.checked })});
+    if (!resp.ok) { let err=null; try{err=await resp.json();}catch{} throw new Error((err && err.error)||('HTTP '+resp.status)); }
+    const blob = await resp.blob(); forceDownload(blob, 'ocr.pdf'); statusEl.textContent='Downloaded.';
+  } catch(e){ statusEl.textContent='Error: '+e.message; } finally { busy(false); }
+}
+
+async function runReportPdf(){
+  busy(true);
+  try {
+    // Get analysis fresh (OCR -> AI) instead of reading from textarea
+    const analysis = await getBizAnalysis();
+    out.value = JSON.stringify(analysis, null, 2); // show what we will render
+    // Build + download PDF
+    const resp = await fetch('/api/report-bizdoc-pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ analysis, brand: { title:"BizDoc Analysis Report", company:"BizDoc" } })
+    });
+    if (!resp.ok) { let err=null; try{err=await resp.json();}catch{} throw new Error((err && err.error)||('HTTP '+resp.status)); }
+    const blob = await resp.blob();
+    forceDownload(blob, 'bizdoc_report.pdf');
+    statusEl.textContent = 'AI report downloaded.';
+  } catch(e){ statusEl.textContent = 'Error: ' + e.message; } finally { busy(false); }
+}
+
+/* ---------- utilities ---------- */
+
+function forceDownload(blob, name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=name || 'file.pdf';
+  document.body.appendChild(a); a.click();
+  URL.revokeObjectURL(a.href); a.remove();
+}
+async function toBase64(file){
+  const buff = await file.arrayBuffer();
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(buff)));
+  return { b64, mime: file.type || 'application/octet-stream' };
+}
+</script>
+</body>
+</html>
+<!-- ---------- Upload PDF Section ---------- -->
+<input type="file" id="pdfUpload" accept="application/pdf">
+<script src="/upload.js"></script>
+
+<!-- ===== Single Upload Button (Large PDF Friendly) ===== -->
+<section style="margin:16px 0;padding:12px;border:1px solid #eee;border-radius:8px">
+  <h3>Analyze & Download (One Button)</h3>
+  <input type="file" id="oneUploadInput" accept="application/pdf" />
+  <button id="oneUploadBtn" style="margin-left:8px;">Analyze & Download AI PDF</button>
+  <br/><br/>
+  <textarea id="oneUploadOutput" style="width:100%;height:220px" placeholder="Analysis will appear here..."></textarea>
+</section>
+<script src="/one-upload.js"></script>
+
+<!-- ===== Single Upload Button (Large PDF Friendly) ===== -->
+<section style="margin:16px 0;padding:12px;border:1px solid #eee;border-radius:8px">
+  <h3>Analyze & Download (One Button)</h3>
+  <input type="file" id="oneUploadInput" accept="application/pdf" />
+  <button id="oneUploadBtn" style="margin-left:8px;">Analyze & Download AI PDF</button>
+  <br/><br/>
+  <textarea id="oneUploadOutput" style="width:100%;height:220px" placeholder="Analysis will appear here..."></textarea>
+</section>
+<script src="/one-upload.js"></script>

@@ -1,6 +1,1 @@
-{
-  "version": 2,
-  "functions": {
-    "api/**/*.{js,cjs,mjs}": { "maxDuration": 60 }
-  }
-}
+{ "version": 2 }

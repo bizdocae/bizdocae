@@ -1,9 +1,11 @@
 /**
- * /api/analyze using pdfjs-dist (no fs reads)
+ * /api/analyze with pdfjs-dist (static import so Vercel bundles it)
  * - Manual JSON parser with size limits
  * - OCR fallback (optional)
  * - Always returns JSON
  */
+
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs"; // <-- static import
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -38,8 +40,7 @@ function detectScanned(buffer) {
 }
 
 async function extractPdfText(buffer, maxPages = 20) {
-  // Use the legacy build that doesn't require a worker in Node
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.js");
+  // Legacy build in Node uses fake worker automatically — no worker file needed
   const loadingTask = pdfjs.getDocument({ data: buffer });
   const pdf = await loadingTask.promise;
   const limit = Math.min(pdf.numPages, maxPages);
@@ -47,7 +48,9 @@ async function extractPdfText(buffer, maxPages = 20) {
   for (let p = 1; p <= limit; p++) {
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    text += content.items.map(it => (typeof it.str === "string" ? it.str : (it?.unicode || ""))).join(" ") + "\n";
+    text += content.items
+      .map((it) => (typeof it.str === "string" ? it.str : (it?.unicode || "")))
+      .join(" ") + "\n";
   }
   return text.trim();
 }

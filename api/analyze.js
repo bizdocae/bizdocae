@@ -1,8 +1,8 @@
 /**
- * bizdoc-min: /api/analyze (cold-start safe)
- * - Lazy imports for heavy libs (pdf-parse, mammoth)
- * - Manual JSON body parse with size limits
- * - Always returns JSON (never plain text HTML)
+ * /api/analyze using pdfjs-dist (no filesystem reads, cold-start safe)
+ * - Manual JSON parser with size limits
+ * - Built-in OCR fallback (optional)
+ * - Always returns JSON
  */
 
 function cors(res) {
@@ -11,7 +11,7 @@ function cors(res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function readJson(req, maxBytes = 8 * 1024 * 1024) { // ≈8MB JSON (~6MB raw file)
+function readJson(req, maxBytes = 8 * 1024 * 1024) { // ~8MB JSON (~6MB raw file)
   return new Promise((resolve, reject) => {
     let size = 0, data = "";
     req.on("data", (chunk) => {
@@ -32,19 +32,40 @@ function readJson(req, maxBytes = 8 * 1024 * 1024) { // ≈8MB JSON (~6MB raw fi
 }
 
 function detectScanned(buffer) {
-  const head = buffer.toString("binary", 0, 4096);
-  return /\/Image/i.test(head);
+  // Simple heuristic: lots of images in the header usually means scanned
+  const head = buffer.toString("binary", 0, 8192);
+  const imgHits = (head.match(/\/Image/g) || []).length;
+  return imgHits >= 2; // conservative
+}
+
+// --- pdfjs text extractor ---
+async function extractPdfTextWithPdfjs(buffer, maxPages = 20) {
+  // Lazy import to prevent cold-start crashes
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.js");
+  // Node doesn't need a worker; pdfjs uses a fake worker in this build
+  const loadingTask = pdfjs.getDocument({ data: buffer });
+  const pdf = await loadingTask.promise;
+  const limit = Math.min(pdf.numPages, maxPages);
+
+  let text = "";
+  for (let p = 1; p <= limit; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const chunk = content.items
+      .map((it) => (typeof it.str === "string" ? it.str : (it?.unicode || "")))
+      .join(" ");
+    text += chunk + "\n";
+  }
+  return text.trim();
 }
 
 export default async function handler(req, res) {
   try {
     cors(res);
     if (req.method === "OPTIONS") return res.status(204).end();
-    if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "POST only" });
-    }
+    if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
 
-    // Parse body (manual for @vercel/node)
+    // Parse request body
     let body;
     try { body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req); }
     catch (e) { return res.status(e.status || 400).json({ ok:false, error: e.message }); }
@@ -63,19 +84,15 @@ export default async function handler(req, res) {
     if (ext === "pdf") {
       const scanned = detectScanned(buf);
       if (!scanned) {
-        // Lazy import pdf-parse
-        const { default: pdfParse } = await import("pdf-parse");
         try {
-          const out = await pdfParse(buf);
-          text = out.text || "";
+          text = await extractPdfTextWithPdfjs(buf, 20);
         } catch (e) {
-          return res.status(500).json({ ok:false, error:"PDF parse failed: " + e.message });
+          return res.status(500).json({ ok:false, error:"PDF text extraction failed: " + e.message });
         }
       } else {
         if (!process.env.OCR_SPACE_KEY)
           return res.status(400).json({ ok:false, error:"Scanned PDF but OCR_SPACE_KEY not set" });
         try {
-          // Use built-in fetch (Node 18+)
           const form = new URLSearchParams();
           form.append("base64Image", "data:application/pdf;base64," + fileBase64);
           form.append("language", "eng");
@@ -90,7 +107,7 @@ export default async function handler(req, res) {
         }
       }
     } else if (ext === "docx") {
-      // Lazy import mammoth
+      // Lazy import mammoth only when needed
       const { default: mammoth } = await import("mammoth");
       try {
         const { value } = await mammoth.extractRawText({ buffer: buf });

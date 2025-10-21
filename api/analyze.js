@@ -1,6 +1,9 @@
-import pdfParse from "pdf-parse";
-import mammoth from "mammoth";
-import fetch from "node-fetch";
+/**
+ * bizdoc-min: /api/analyze (cold-start safe)
+ * - Lazy imports for heavy libs (pdf-parse, mammoth)
+ * - Manual JSON body parse with size limits
+ * - Always returns JSON (never plain text HTML)
+ */
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -8,10 +11,9 @@ function cors(res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function readJson(req, maxBytes = 8 * 1024 * 1024) { // ~8MB JSON (≈ 6MB raw base64 payload)
+function readJson(req, maxBytes = 8 * 1024 * 1024) { // ≈8MB JSON (~6MB raw file)
   return new Promise((resolve, reject) => {
-    let size = 0;
-    let data = "";
+    let size = 0, data = "";
     req.on("data", (chunk) => {
       size += chunk.length;
       if (size > maxBytes) {
@@ -38,8 +40,11 @@ export default async function handler(req, res) {
   try {
     cors(res);
     if (req.method === "OPTIONS") return res.status(204).end();
-    if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
+    if (req.method !== "POST") {
+      return res.status(405).json({ ok: false, error: "POST only" });
+    }
 
+    // Parse body (manual for @vercel/node)
     let body;
     try { body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req); }
     catch (e) { return res.status(e.status || 400).json({ ok:false, error: e.message }); }
@@ -58,6 +63,8 @@ export default async function handler(req, res) {
     if (ext === "pdf") {
       const scanned = detectScanned(buf);
       if (!scanned) {
+        // Lazy import pdf-parse
+        const { default: pdfParse } = await import("pdf-parse");
         try {
           const out = await pdfParse(buf);
           text = out.text || "";
@@ -68,6 +75,7 @@ export default async function handler(req, res) {
         if (!process.env.OCR_SPACE_KEY)
           return res.status(400).json({ ok:false, error:"Scanned PDF but OCR_SPACE_KEY not set" });
         try {
+          // Use built-in fetch (Node 18+)
           const form = new URLSearchParams();
           form.append("base64Image", "data:application/pdf;base64," + fileBase64);
           form.append("language", "eng");
@@ -82,6 +90,8 @@ export default async function handler(req, res) {
         }
       }
     } else if (ext === "docx") {
+      // Lazy import mammoth
+      const { default: mammoth } = await import("mammoth");
       try {
         const { value } = await mammoth.extractRawText({ buffer: buf });
         text = value || "";

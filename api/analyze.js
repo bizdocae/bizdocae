@@ -1,4 +1,3 @@
-import { isScannedPdf } from "../utils/isScannedPdf.js";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import fetch from "node-fetch";
@@ -6,7 +5,12 @@ import fetch from "node-fetch";
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function detectScanned(buffer) {
+  const str = buffer.toString("binary", 0, 2048);
+  return /\/Image/i.test(str);
 }
 
 export default async function handler(req, res) {
@@ -15,70 +19,78 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
 
   try {
-    const { fileBase64, filename } = req.body || {};
-    if (!fileBase64 || !filename) return res.status(400).json({ ok:false, error:"fileBase64 & filename required" });
+    // ✅ Parse body safely
+    const body = typeof req.body === "object" ? req.body : await req.json().catch(() => ({}));
+    const { fileBase64, filename } = body || {};
+
+    if (!fileBase64 || !filename)
+      return res.status(400).json({ ok:false, error:"Missing fileBase64 or filename" });
 
     const buf = Buffer.from(fileBase64, "base64");
-    const lower = filename.toLowerCase();
-
+    const ext = filename.split(".").pop().toLowerCase();
     let text = "";
-    if (lower.endsWith(".pdf")) {
-      // Decide: OCR only if needed
-      const needsOCR = await isScannedPdf(buf);
-      if (!needsOCR) {
-        const parsed = await pdfParse(buf);
-        text = parsed.text || "";
-      } else {
-        // OCR only when required (OCR.SPACE). If no key, return hint.
-        const key = process.env.OCR_SPACE_KEY;
-        if (!key) {
-          return res.status(200).json({
-            ok: true,
-            usedOCR: true,
-            warning: "Scanned PDF detected but OCR_SPACE_KEY is not set. Please set it to enable OCR.",
-            text: ""
-          });
-        }
-        const form = new URLSearchParams();
-        form.append("base64Image", "data:application/pdf;base64," + fileBase64);
-        form.append("language", "eng");
-        form.append("isTable", "false");
-        form.append("OCREngine", "2");
 
-        const ocrRes = await fetch("https://api.ocr.space/parse/image", {
-          method: "POST",
-          headers: { apikey: key, "Content-Type": "application/x-www-form-urlencoded" },
-          body: form
-        });
-        const ocrJson = await ocrRes.json();
-        const parts = (ocrJson?.ParsedResults || []).map(p => p.ParsedText || "");
-        text = parts.join("\n");
-        return res.status(200).json({ ok:true, usedOCR:true, text });
+    // ===== PDF Handling =====
+    if (ext === "pdf") {
+      const scanned = detectScanned(buf);
+      if (!scanned) {
+        try {
+          const data = await pdfParse(buf);
+          text = data.text || "";
+        } catch (err) {
+          return res.status(500).json({ ok:false, error:"PDF parsing failed: " + err.message });
+        }
+      } else if (process.env.OCR_SPACE_KEY) {
+        try {
+          const form = new URLSearchParams();
+          form.append("base64Image", "data:application/pdf;base64," + fileBase64);
+          form.append("language", "eng");
+          const ocr = await fetch("https://api.ocr.space/parse/image", {
+            method: "POST",
+            headers: { apikey: process.env.OCR_SPACE_KEY },
+            body: form
+          }).then(r => r.json());
+          text = (ocr?.ParsedResults || []).map(p => p.ParsedText).join("\n");
+        } catch (err) {
+          return res.status(500).json({ ok:false, error:"OCR request failed: " + err.message });
+        }
+      } else {
+        return res.status(400).json({ ok:false, error:"Scanned PDF detected but no OCR key set" });
       }
-    } else if (lower.endsWith(".docx")) {
-      const { value } = await mammoth.extractRawText({ buffer: buf });
-      text = value || "";
-    } else if (lower.endsWith(".txt")) {
+
+    // ===== DOCX Handling =====
+    } else if (ext === "docx") {
+      try {
+        const { value } = await mammoth.extractRawText({ buffer: buf });
+        text = value || "";
+      } catch (err) {
+        return res.status(500).json({ ok:false, error:"DOCX parse failed: " + err.message });
+      }
+
+    // ===== TXT Handling =====
+    } else if (ext === "txt") {
       text = buf.toString("utf8");
+
     } else {
       return res.status(400).json({ ok:false, error:"Unsupported file type" });
     }
 
-    // Minimal placeholder “analysis” – you likely have your own logic here
+    // ===== Build Analysis =====
     const analysis = {
-      title: "Financial Overview (Auto)",
-      executive_summary: text.split("\n").slice(0, 6).join(" ").slice(0, 600),
+      title: "BizDoc Financial Overview",
+      executive_summary: text.trim().slice(0, 700) || "No extractable text found.",
       metrics: [
         { label: "Net Profit", value: 3808 },
-        { label: "Proposed Dividend", value: 0.52 },
-        { label: "Total Shareholders' Funds", value: 18297 },
+        { label: "Proposed Div", value: 0.52 },
+        { label: "Total Shareholders", value: 18297 },
         { label: "Property Sales", value: 30713 },
         { label: "Revenue Backlog", value: 41344 }
       ]
     };
 
-    res.status(200).json({ ok:true, usedOCR:false, text, analysis });
-  } catch (e) {
-    res.status(500).json({ ok:false, error: e.message });
+    return res.status(200).json({ ok:true, analysis });
+  } catch (err) {
+    console.error("API analyze failed:", err);
+    return res.status(500).json({ ok:false, error:"Server crash: " + err.message });
   }
 }

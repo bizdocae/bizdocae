@@ -3,7 +3,6 @@ import fs from "fs";
 
 export const config = { api: { bodyParser: false } };
 
-// ---- helpers ----
 function json(res, status, obj) {
   try { res.setHeader("Content-Type","application/json; charset=utf-8"); } catch {}
   res.status(status).end(JSON.stringify(obj));
@@ -14,8 +13,6 @@ function toUint8(buffer) {
 }
 
 function getPdfJs() {
-  // Node-safe legacy build of pdf.js (must be installed: pdfjs-dist@^3.11.174)
-  // Using CJS require under the hood keeps it Lambda-friendly.
   const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
   try { pdfjsLib.GlobalWorkerOptions.workerSrc = null; } catch {}
   return pdfjsLib;
@@ -29,10 +26,9 @@ async function extractTextWithPdfJs(fileBuffer) {
     disableFontFace: true,
     useWorkerFetch: false,
     disableRange: true,
-    disableStream: true,
+    disableStream: true
   });
   const pdf = await loadingTask.promise;
-
   let text = "";
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
@@ -44,38 +40,33 @@ async function extractTextWithPdfJs(fileBuffer) {
   return text.trim();
 }
 
+// Heuristic: treat as "low text" only if < 8 tokens.
+// (This prefers pdf.js if there's *any* meaningful text.)
 function isLowText(s) {
   if (!s) return true;
-  const len = s.length;
-  if (len < 200) return true;
-  const ascii = s.replace(/[^\x20-\x7E]/g, "").length;
-  return (ascii / len) < 0.5; // lots of non-ascii often means scanned
+  const tokens = s.trim().split(/\s+/).filter(Boolean);
+  return tokens.length < 8;
 }
 
-async function ocrFallback(baseUrl, fileBuffer, filename="upload.pdf") {
-  // Use your existing OCR route: /api/ocr-ocrspace-upload-pdf
-  // Build multipart payload in Node 20 (Blob/FormData are global)
+async function ocrFallback(baseUrl, fileBuffer, filename, language) {
   const fd = new FormData();
   fd.append("file", new Blob([fileBuffer], { type: "application/pdf" }), filename);
   fd.append("wantText", "true");
-  fd.append("wantSearchablePdf", "false");
-  fd.append("language", "auto");
+  fd.append("wantSearchablePdf", "true"); // return PDF URL when OCR provides it
+  fd.append("language", language || "auto");
 
-  const r = await fetch(baseUrl + "/api/ocr-ocrspace-upload-pdf", {
-    method: "POST",
-    body: fd
-  });
+  const r = await fetch(baseUrl + "/api/ocr-ocrspace-upload-pdf", { method: "POST", body: fd });
+  const rawTxt = await r.text();
+  let j = {};
+  try { j = JSON.parse(rawTxt); } catch { /* leave {} */ }
 
-  if (!r.ok) {
-    const body = await r.text().catch(()=> "");
-    throw new Error(`OCR route failed HTTP ${r.status}: ${body.slice(0,300)}`);
+  if (!r.ok || !j.ok) {
+    const msg = (j && (j.error || j.detail)) ? `: ${j.error || j.detail}` : "";
+    throw new Error(`OCR failed HTTP ${r.status}${msg}`);
   }
-  const j = await r.json().catch(()=> ({}));
-  if (!j.ok || !j.text) throw new Error(`OCR returned no text`);
-  return j.text;
+  return { text: j.text || "", pdfUrl: j.pdfUrl || null };
 }
 
-// ---- main handler ----
 export default async function handler(req, res) {
   // CORS / preflight
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -85,54 +76,52 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { ok:false, error:"Use POST" });
 
   try {
-    // Parse multipart
     const form = formidable({
       multiples: false,
-      maxFileSize: 10 * 1024 * 1024, // 10 MB
-      filter: part => part.mimetype === "application/pdf" || part.name === "file"
+      maxFileSize: 10 * 1024 * 1024,
+      filter: p => p.name === "file" || p.name === "lang" || p.name === "language" || p.name === "force"
     });
-
     const [fields, files] = await form.parse(req);
     const up = files.file?.[0];
     if (!up) return json(res, 400, { ok:false, error:"Missing file (field name must be 'file')." });
 
-    const filePath = up.filepath || up.path;
-    const buffer = fs.readFileSync(filePath);
+    const language = (fields.lang?.[0] || fields.language?.[0] || "auto").toString().trim() || "auto";
+    const forceOCR = ((fields.force?.[0] || "").toString().trim() === "1");
 
-    // Step 1: try text extraction with pdf.js
-    let text = "";
+    const buffer = await fs.promises.readFile(up.filepath || up.path);
+
+    // Step 1: pdf.js
     let source = "pdfjs";
-    try {
-      text = await extractTextWithPdfJs(buffer);
-    } catch (e) {
-      // pdf.js failed, treat as no text; go OCR below
-      text = "";
-    }
+    let text = "";
+    let ocredPdfUrl = null;
 
-    // Step 2: OCR fallback if low/no text
+    try { text = await extractTextWithPdfJs(buffer); } catch { text = ""; }
+
     const proto = req.headers["x-forwarded-proto"] || "https";
     const host  = req.headers.host || "localhost:3000";
     const base  = `${proto}://${host}`;
 
-    if (isLowText(text)) {
+    // Step 2: OCR when forced or low text
+    if (forceOCR || isLowText(text)) {
       try {
-        const ocrText = await ocrFallback(base, buffer, up.originalFilename || "upload.pdf");
-        if (ocrText && ocrText.trim().length > 0) {
-          text = ocrText.trim();
+        const { text: otext, pdfUrl } = await ocrFallback(base, buffer, up.originalFilename || "upload.pdf", language);
+        if (otext && otext.trim()) {
+          text = otext.trim();
+          ocredPdfUrl = pdfUrl || null;
           source = "ocr";
+        } else if (!text) {
+          return json(res, 422, { ok:false, error:"No readable text in PDF (OCR empty).", hint:"Try clearer scan or another language." });
         }
       } catch (e) {
-        // If OCR fails AND pdfjs had no text, return 422 to hint OCR needed
-        if (!text) return json(res, 422, { ok:false, error:"No readable text in PDF (OCR failed).", detail:String(e?.message||e).slice(0,300) });
-        // else proceed with whatever text we have
+        if (!text) return json(res, 422, { ok:false, error:"No readable text in PDF (OCR failed).", detail:String(e?.message||e) });
       }
     }
 
-    if (!text || !text.trim()) {
-      return json(res, 422, { ok:false, error:"No readable text in PDF.", hint:"Try a clearer scan or enable OCR." });
+    if (!text?.trim()) {
+      return json(res, 422, { ok:false, error:"No readable text in PDF.", hint:"Try clearer scan or choose a language for OCR." });
     }
 
-    // Step 3: Analyze
+    // Step 3: analyze
     const ar = await fetch(base + "/api/analyze-bizdoc", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
@@ -141,12 +130,11 @@ export default async function handler(req, res) {
 
     if (!ar.ok) {
       const body = await ar.text().catch(()=> "");
-      return json(res, 502, { ok:false, error:`Analyzer failed HTTP ${ar.status}`, detail:body.slice(0,400) });
+      return json(res, 502, { ok:false, error:`Analyzer failed HTTP ${ar.status}`, detail: body.slice(0,400) });
     }
 
     const data = await ar.json().catch(()=> ({}));
-    return json(res, 200, { ok:true, source, analysis: data.analysis });
-
+    return json(res, 200, { ok:true, source, ocredPdfUrl, analysis: data.analysis });
   } catch (err) {
     return json(res, 500, { ok:false, error:"Upload handler error", detail:String(err?.message||err).slice(0,400) });
   }

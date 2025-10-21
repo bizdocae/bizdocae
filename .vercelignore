@@ -1,6 +1,9 @@
 node_modules
-.git
-.vscode
-.DS_Store
-.vercel
-node_modules
+*.log
+tmp/
+cache/
+dist/
+build/
+coverage/
+api_archive/
+# Keep API routes! (do not add "api/" here)

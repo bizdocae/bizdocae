@@ -1,94 +1,100 @@
-export const config = { runtime: "nodejs", api: { bodyParser: false } };
-
-// Load deps in a way that works in both ESM and CJS projects on Vercel
-async function getDeps() {
-  const multerMod = await import("multer");
-  const pdfParseMod = await import("pdf-parse");
-  const multer = multerMod.default || multerMod;
-  const pdfParse = pdfParseMod.default || pdfParseMod;
-  return { multer, pdfParse };
-}
-
 function json(res, status, obj) {
+  try { res.setHeader("Content-Type", "application/json; charset=utf-8"); } catch {}
   res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(obj));
 }
 
 function isMultipart(req) {
-  const ct = req.headers["content-type"] || "";
-  return ct.startsWith("multipart/form-data");
+  const ct = (req.headers && req.headers["content-type"]) || "";
+  return /^multipart\/form-data/i.test(ct);
 }
 
-// Promisified Multer (created after we import the module)
-function makeRunMulter(multer) {
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  });
-
-  return (req, res) =>
-    new Promise((resolve, reject) => {
-      upload.single("file")(req, res, (err) => {
-        if (err && err.code === "LIMIT_FILE_SIZE") {
-          const e = new Error("File too large. Max 10MB.");
-          e.statusCode = 413;
-          return reject(e);
-        }
-        return err ? reject(err) : resolve();
-      });
-    });
-}
-
-export default async function handler(req, res) {
+async function handler(req, res) {
   // CORS / preflight
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return json(res, 405, { ok: false, error: "Use POST" });
+  if (req.method !== "POST") return json(res, 405, { ok:false, error:"Use POST" });
 
+  // ✅ EARLY VALIDATION: do not import anything yet
+  if (!isMultipart(req)) {
+    return json(res, 400, { ok:false, error:"Content-Type must be multipart/form-data; use field 'file'." });
+  }
+
+  // Load deps only now (avoids cold-start crashes if bundler confuses module format)
+  let multer, pdfParse;
   try {
-    if (!isMultipart(req)) {
-      return json(res, 400, { ok: false, error: "Content-Type must be multipart/form-data; use field name 'file'." });
-    }
+    multer   = require("multer");
+    pdfParse = require("pdf-parse");
+  } catch (e) {
+    return json(res, 500, { ok:false, error:"Dependency load failed", detail:String(e && e.message || e) });
+  }
 
-    const { multer, pdfParse } = await getDeps();
-    const runMulter = makeRunMulter(multer);
+  // Multer setup (10 MB, memory)
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 }
+  });
 
-    await runMulter(req, res);
-    const file = req.file;
-    if (!file) return json(res, 400, { ok: false, error: "No file uploaded (field must be 'file')." });
+  // Run Multer
+  await new Promise((resolve, reject) => {
+    upload.single("file")(req, res, (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") { err.statusCode = 413; err.message = "File too large. Max 10MB."; }
+        return reject(err);
+      }
+      resolve();
+    });
+  }).catch(e => {
+    const sc = e && e.statusCode ? e.statusCode : 500;
+    return json(res, sc, { ok:false, error:String(e && e.message || e) });
+  });
+  if (res.writableEnded) return; // already responded above on error
 
-    if (file.mimetype !== "application/pdf") {
-      return json(res, 415, { ok: false, error: `Unsupported type: ${file.mimetype}. PDF only.` });
-    }
+  const file = req.file;
+  if (!file) return json(res, 400, { ok:false, error:"No file uploaded (field must be 'file')." });
+  if (file.mimetype !== "application/pdf") {
+    return json(res, 415, { ok:false, error:`Unsupported type: ${file.mimetype}. PDF only.` });
+  }
 
-    // Extract text (PDF must contain a text layer)
-    const parsed = await pdfParse(file.buffer).catch(() => ({ text: "" }));
-    const text = (parsed.text || "").trim();
-    if (!text) return json(res, 422, { ok: false, error: "No readable text in PDF (needs OCR)." });
+  // Extract text
+  let text = "";
+  try {
+    const parsed = await pdfParse(file.buffer);
+    text = (parsed && parsed.text || "").trim();
+  } catch {
+    text = "";
+  }
+  if (!text) return json(res, 422, { ok:false, error:"No readable text in PDF (needs OCR)." });
 
-    // Call analyzer
-    const proto = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "localhost:3000";
-    const baseUrl = `${proto}://${host}`;
+  // Call analyzer
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const host  = req.headers.host || "localhost:3000";
+  const base  = `${proto}://${host}`;
 
-    const ar = await fetch(baseUrl + "/api/analyze-bizdoc", {
+  let ar;
+  try {
+    ar = await fetch(base + "/api/analyze-bizdoc", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, type: "document" }),
+      body: JSON.stringify({ text, type: "document" })
     });
-
-    if (!ar.ok) {
-      const msg = await ar.text().catch(() => "");
-      return json(res, 502, { ok: false, error: `Analyzer failed HTTP ${ar.status}`, detail: msg.slice(0, 400) });
-    }
-
-    const data = await ar.json().catch(() => ({}));
-    return json(res, 200, { ok: true, analysis: data.analysis });
   } catch (e) {
-    const sc = e?.statusCode || 500;
-    return json(res, sc, { ok: false, error: String(e?.message || e) });
+    return json(res, 502, { ok:false, error:"Analyzer fetch failed", detail:String(e && e.message || e) });
   }
+
+  if (!ar.ok) {
+    const msg = await ar.text().catch(()=> "");
+    return json(res, 502, { ok:false, error:`Analyzer failed HTTP ${ar.status}`, detail: msg.slice(0,400) });
+  }
+
+  let data = {};
+  try { data = await ar.json(); } catch {}
+  return json(res, 200, { ok:true, analysis: data.analysis });
 }
+
+module.exports = handler;
+// Vercel route config – CommonJS
+module.exports.config = { runtime: "nodejs", api: { bodyParser: false } };

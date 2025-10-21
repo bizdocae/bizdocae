@@ -8,21 +8,24 @@ function cors(res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function readJson(req, maxBytes = 15 * 1024 * 1024) {
+function readJson(req, maxBytes = 8 * 1024 * 1024) { // ~8MB JSON (≈ 6MB raw base64 payload)
   return new Promise((resolve, reject) => {
+    let size = 0;
     let data = "";
     req.on("data", (chunk) => {
-      data += chunk;
-      if (data.length > maxBytes) {
-        reject(new Error("Body too large"));
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error("Request body too large"), { status: 413 }));
         req.destroy();
+        return;
       }
+      data += chunk;
     });
     req.on("end", () => {
       try { resolve(data ? JSON.parse(data) : {}); }
-      catch (e) { reject(new Error("Invalid JSON body")); }
+      catch { reject(Object.assign(new Error("Invalid JSON body"), { status: 400 })); }
     });
-    req.on("error", reject);
+    req.on("error", (e) => reject(Object.assign(e, { status: 400 })));
   });
 }
 
@@ -37,10 +40,9 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
 
-    // Parse body safely (Vercel Node: manual)
     let body;
     try { body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req); }
-    catch (e) { return res.status(400).json({ ok:false, error: e.message }); }
+    catch (e) { return res.status(e.status || 400).json({ ok:false, error: e.message }); }
 
     const { fileBase64, filename } = body || {};
     if (!fileBase64 || !filename) return res.status(400).json({ ok:false, error:"Missing fileBase64 or filename" });

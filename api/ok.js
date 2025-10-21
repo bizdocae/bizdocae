@@ -1,5 +1,21 @@
-module.exports = (req, res) => {
-  res.setHeader('Content-Type','application/json; charset=utf-8');
-  res.status(200).end(JSON.stringify({ ok:true, t: Date.now() }));
-};
-module.exports.config = { runtime: 'nodejs' };
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+
+  const info = {
+    ok: true,
+    service: "BizDoc-Min API",
+    status: "Healthy",
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      analyze: "/api/analyze",
+      download: "/api/download",
+      ok: "/api/ok"
+    }
+  };
+
+  res.status(200).json(info);
+}

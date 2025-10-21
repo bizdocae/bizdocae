@@ -7,34 +7,70 @@ function isMultipart(req) {
   const ct = (req.headers && req.headers['content-type']) || '';
   return /^multipart\/form-data/i.test(ct);
 }
+
+// Node-safe text extractor using pdf.js legacy build
+async function extractTextWithPdfJs(buffer) {
+  // dynamic ESM import works fine inside CJS route
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const loadingTask = pdfjs.getDocument({ data: buffer });
+  const doc = await loadingTask.promise;
+  let all = '';
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    const s = tc.items.map(it => (it && it.str) ? it.str : '').join(' ');
+    all += s + '\n';
+    page.cleanup && page.cleanup();
+  }
+  doc.cleanup && doc.cleanup();
+  return all.trim();
+}
+
 module.exports = async function handler(req, res) {
+  // CORS / preflight
   res.setHeader('Access-Control-Allow-Origin','*');
   res.setHeader('Access-Control-Allow-Methods','POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return json(res, 405, { ok:false, error:'Use POST' });
-  if (!isMultipart(req)) return json(res, 400, { ok:false, error:"Content-Type must be multipart/form-data; use field 'file'." });
 
-  let multer, pdfParse;
-  try { multer = require('multer'); pdfParse = require('pdf-parse'); }
-  catch (e) { return json(res, 500, { ok:false, error:'Dependency load failed', detail:String(e?.message||e) }); }
+  if (!isMultipart(req)) {
+    return json(res, 400, { ok:false, error:"Content-Type must be multipart/form-data; use field 'file'." });
+  }
 
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024 }});
-  await new Promise((resolve, reject)=> upload.single('file')(req, res, err=>{
-    if (err){ if (err.code==='LIMIT_FILE_SIZE'){ err.statusCode=413; err.message='File too large. Max 10MB.'; } return reject(err); }
-    resolve();
-  })).catch(e=> json(res, e?.statusCode||500, { ok:false, error:String(e?.message||e) }));
+  // Load multer only (no pdf-parse)
+  let multer;
+  try { multer = require('multer'); }
+  catch (e) { return json(res, 500, { ok:false, error:'Dependency load failed (multer)', detail:String(e?.message||e) }); }
+
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB
+
+  await new Promise((resolve, reject) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') { err.statusCode = 413; err.message = 'File too large. Max 10MB.'; }
+        return reject(err);
+      }
+      resolve();
+    });
+  }).catch(e => json(res, e?.statusCode||500, { ok:false, error:String(e?.message||e) }));
   if (res.writableEnded) return;
 
   const file = req.file;
   if (!file) return json(res, 400, { ok:false, error:"No file uploaded (field must be 'file')." });
   if (file.mimetype !== 'application/pdf') return json(res, 415, { ok:false, error:`Unsupported type: ${file.mimetype}. PDF only.` });
 
+  // Extract text with pdf.js legacy
   let text = '';
-  try { const parsed = await pdfParse(file.buffer); text = (parsed?.text||'').trim(); } catch {}
+  try {
+    text = await extractTextWithPdfJs(file.buffer);
+  } catch (e) {
+    return json(res, 500, { ok:false, error:'PDF text extraction failed', detail:String(e?.message||e).slice(0,300) });
+  }
   if (!text) return json(res, 422, { ok:false, error:'No readable text in PDF (needs OCR).' });
 
+  // Call analyzer
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const host  = req.headers.host || 'localhost:3000';
   const base  = `${proto}://${host}`;
@@ -42,7 +78,8 @@ module.exports = async function handler(req, res) {
   let ar;
   try {
     ar = await fetch(base + '/api/analyze-bizdoc', {
-      method:'POST', headers:{ 'Content-Type':'application/json' },
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify({ text, type:'document' })
     });
   } catch (e) {

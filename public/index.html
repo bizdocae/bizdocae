@@ -1,40 +1,58 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BizDoc — Analyze & Download</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<meta charset="UTF-8">
+<title>BizDoc Analyzer</title>
+<style>
+body { font-family: Inter, sans-serif; max-width: 700px; margin: 40px auto; background: #fafafa; }
+h1 { color: #222; }
+input, button { padding: 10px; margin: 8px 0; width: 100%; font-size: 15px; }
+button { background: #0070f3; color: white; border: none; cursor: pointer; border-radius: 6px; }
+button:hover { background: #0057c2; }
+#out { white-space: pre-wrap; font-size: 14px; background: #fff; padding: 10px; border-radius: 8px; border: 1px solid #ccc; }
+</style>
 </head>
 <body>
-  <main class="container">
-    <h1><strong>BizDoc</strong> — Analyze & Download</h1>
-    <p>Upload a PDF (up to 10 MB). We’ll analyze it and download a double-refined report.</p>
+  <h1>BizDoc Analyzer (bizdoc-min)</h1>
+  <input type="file" id="file" accept=".pdf,.docx,.txt" />
+  <button id="analyze">Analyze & Download</button>
+  <div id="out"></div>
 
-    <article>
-      <input type="file" id="fileInput" accept="application/pdf"><br><br>
+<script>
+const analyzeBtn = document.getElementById("analyze");
+const fileInput = document.getElementById("file");
+const out = document.getElementById("out");
 
-      <label>
-        OCR language:
-        <select id="langSelect">
-          <option value="auto">Auto Detect</option>
-          <option value="eng">English</option>
-          <option value="ara">Arabic</option>
-          <option value="fra">French</option>
-        </select>
-      </label>
+analyzeBtn.onclick = async () => {
+  const f = fileInput.files[0];
+  if (!f) return alert("Select a file first.");
+  out.textContent = "Analyzing...";
 
-      <label>
-        <input type="checkbox" id="forceOcr" value="1"> Force OCR
-      </label><br><br>
+  const b64 = await f.arrayBuffer().then(b => btoa(String.fromCharCode(...new Uint8Array(b))));
+  const analysisRes = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileBase64: b64, filename: f.name })
+  }).then(r => r.json());
 
-      <button id="analyzeBtn">Analyze & Download AI PDF</button>
-      <a id="ocrLink" href="#" target="_blank" style="display:none; margin-left:1rem;">Download OCR’d PDF</a>
+  if (!analysisRes.ok) return out.textContent = "Error: " + analysisRes.error;
+  out.textContent = "Generating PDF...";
 
-      <hr>
-      <textarea id="out" rows="12" style="width:100%;">AI analysis will appear here...</textarea>
-    </article>
-  </main>
-  <script src="/one-upload.js"></script>
+  const pdfRes = await fetch("/api/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ analysis: analysisRes.analysis })
+  });
+
+  const blob = await pdfRes.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "BizDoc_Report.pdf";
+  a.click();
+  URL.revokeObjectURL(url);
+  out.textContent = "✅ Done — PDF downloaded.";
+};
+</script>
 </body>
 </html>

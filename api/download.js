@@ -1,83 +1,87 @@
-import fs from "fs";
-import path from "path";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
-import { drawBarChart } from "../utils/simpleBarChart.js";
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-async function loadInter() {
-  const p = path.join(process.cwd(), "fonts", "Inter-Regular.ttf");
-  return fs.readFileSync(p);
+function readJson(req, maxBytes = 1 * 1024 * 1024) { // analysis payload is small
+  return new Promise((resolve, reject) => {
+    let size = 0, data = "";
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error("Request body too large"), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      data += chunk;
+    });
+    req.on("end", () => {
+      try { resolve(data ? JSON.parse(data) : {}); }
+      catch { reject(Object.assign(new Error("Invalid JSON body"), { status: 400 })); }
+    });
+    req.on("error", (e) => reject(Object.assign(e, { status: 400 })));
+  });
 }
 
 export default async function handler(req, res) {
-  cors(res);
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
-
   try {
-    const { analysis } = req.body || {};
-    if (!analysis) return res.status(400).json({ ok:false, error:"analysis required" });
+    cors(res);
+    if (req.method === "OPTIONS") return res.status(204).end();
+    if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
+
+    let body;
+    try { body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req); }
+    catch (e) { return res.status(e.status || 400).json({ ok:false, error: e.message }); }
+
+    const { analysis } = body || {};
+    if (!analysis) return res.status(400).json({ ok:false, error:"Missing analysis data" });
 
     const doc = await PDFDocument.create();
-    // Embed deterministic English font (no shadows, no anti-aliased overlays)
-    const interBytes = await loadInter();
-    const inter = await doc.embedFont(interBytes, { subset: true });
-
-    const page = doc.addPage([595.28, 841.89]); // A4 portrait
-    const { width, height } = page.getSize();
-
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([595.28, 841.89]); // A4
+    const { width: W, height: H } = page.getSize();
     const black = rgb(0,0,0);
 
-    // Header
-    page.drawText(analysis.title || "Financial Overview", {
-      x: 40, y: height - 60, size: 20, color: black, font: inter
-    });
+    page.drawRectangle({ x:0, y:0, width:W, height:H, color: rgb(1,1,1) });
+    page.drawText(analysis.title || "Report", { x: 40, y: H-60, size: 20, font, color: black });
 
-    // Executive Summary
-    page.drawText("Executive Summary", { x: 40, y: height - 95, size: 12, color: black, font: inter });
-    const summary = (analysis.executive_summary || "").replace(/\s+/g, " ").slice(0, 1200);
-    // simple text wrap
-    const wrapWidth = 90; // chars per line (approx for this font size)
-    let sx = 40, sy = height - 115, ln = "";
-    for (const w of summary.split(" ")) {
-      const t = (ln ? ln + " " : "") + w;
-      if (t.length > wrapWidth) {
-        page.drawText(ln, { x: sx, y: sy, size: 10.5, color: black, font: inter });
-        sy -= 14;
-        ln = w;
-      } else ln = t;
+    let y = H - 100;
+    page.drawText("Executive Summary:", { x: 40, y, size: 12, font, color: black });
+    y -= 16;
+
+    const wrap = (t, max = 95) => {
+      const words = (t || "").split(/\s+/);
+      let line = "", lines = [];
+      for (const w of words) {
+        const test = (line + " " + w).trim();
+        if (test.length > max) { lines.push(line); line = w; } else { line = test; }
+      }
+      if (line) lines.push(line);
+      return lines;
+    };
+
+    for (const ln of wrap(analysis.executive_summary || "", 95)) {
+      page.drawText(ln, { x: 40, y, size: 10, font, color: black });
+      y -= 12;
     }
-    if (ln) page.drawText(ln, { x: sx, y: sy, size: 10.5, color: black, font: inter });
-    sy -= 24;
 
-    // Metrics list
-    page.drawText("KPI Snapshot", { x: 40, y: sy, size: 12, color: black, font: inter });
-    sy -= 16;
-    const m = analysis.metrics || [];
-    m.slice(0, 8).forEach((kv, i) => {
-      const line = `• ${kv.label}: ${kv.value}`;
-      page.drawText(line, { x: 48, y: sy - i*14, size: 10.5, color: black, font: inter });
-    });
-
-    // Bar chart
-    drawBarChart(page, {
-      x: 40, y: 140, w: width - 80, h: 220,
-      labels: m.map(o => o.label),
-      values: m.map(o => Number(o.value) || 0)
-    }, inter, 8.5);
+    y -= 18;
+    page.drawText("KPI Snapshot:", { x: 40, y, size: 12, font, color: black });
+    y -= 14;
+    for (const m of (analysis.metrics || [])) {
+      page.drawText(`• ${m.label}: ${m.value}`, { x: 50, y, size: 10, font, color: black });
+      y -= 12;
+    }
 
     const pdfBytes = await doc.save();
-    const fname = (analysis.filename || "report") + ".pdf";
-
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    res.setHeader("Content-Disposition", 'attachment; filename="report.pdf"');
     res.status(200).send(Buffer.from(pdfBytes));
   } catch (e) {
-    res.status(500).json({ ok:false, error: e.message });
+    console.error("UNCAUGHT /api/download error:", e);
+    res.status(500).json({ ok:false, error:"PDF generation failed: " + e.message });
   }
 }

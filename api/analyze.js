@@ -1,11 +1,4 @@
-/**
- * /api/analyze with pdfjs-dist (static import so Vercel bundles it)
- * - Manual JSON parser with size limits
- * - OCR fallback (optional)
- * - Always returns JSON
- */
-
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs"; // <-- static import
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -15,44 +8,49 @@ function cors(res) {
 
 function readJson(req, maxBytes = 8 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    let size = 0, data = "";
-    req.on("data", (chunk) => {
+    let data = "", size = 0;
+    req.on("data", chunk => {
       size += chunk.length;
       if (size > maxBytes) {
-        reject(Object.assign(new Error("Request body too large"), { status: 413 }));
+        reject(Object.assign(new Error("Request too large"), { status: 413 }));
         req.destroy();
-        return;
-      }
-      data += chunk;
+      } else data += chunk;
     });
     req.on("end", () => {
       try { resolve(data ? JSON.parse(data) : {}); }
       catch { reject(Object.assign(new Error("Invalid JSON body"), { status: 400 })); }
     });
-    req.on("error", (e) => reject(Object.assign(e, { status: 400 })));
   });
 }
 
 function detectScanned(buffer) {
   const head = buffer.toString("binary", 0, 8192);
-  const hits = (head.match(/\/Image/g) || []).length;
-  return hits >= 2;
+  return (head.match(/\/Image/g) || []).length >= 2;
 }
 
-async function extractPdfText(buffer, maxPages = 20) {
-  // Legacy build in Node uses fake worker automatically — no worker file needed
-  const loadingTask = pdfjs.getDocument({ data: buffer });
-  const pdf = await loadingTask.promise;
-  const limit = Math.min(pdf.numPages, maxPages);
+async function extractWithPdfjs(buffer) {
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const pdf = await pdfjs.getDocument({ data: uint8 }).promise;
   let text = "";
-  for (let p = 1; p <= limit; p++) {
-    const page = await pdf.getPage(p);
+  for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+    const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    text += content.items
-      .map((it) => (typeof it.str === "string" ? it.str : (it?.unicode || "")))
-      .join(" ") + "\n";
+    text += content.items.map(it => it.str || "").join(" ") + "\n";
   }
   return text.trim();
+}
+
+async function extractWithOCR(fileBase64) {
+  const form = new URLSearchParams();
+  form.append("base64Image", "data:application/pdf;base64," + fileBase64);
+  form.append("language", "eng");
+  const res = await fetch("https://api.ocr.space/parse/image", {
+    method: "POST",
+    headers: { apikey: process.env.OCR_SPACE_KEY },
+    body: form
+  });
+  const data = await res.json();
+  return (data.ParsedResults || []).map(p => p.ParsedText || "").join("\n");
 }
 
 export default async function handler(req, res) {
@@ -61,51 +59,37 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
 
-    let body;
-    try { body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req); }
-    catch (e) { return res.status(e.status || 400).json({ ok:false, error: e.message }); }
-
+    const body = typeof req.body === "object" ? req.body : await readJson(req);
     const { fileBase64, filename } = body || {};
     if (!fileBase64 || !filename) return res.status(400).json({ ok:false, error:"Missing fileBase64 or filename" });
 
-    let buf;
-    try { buf = Buffer.from(fileBase64, "base64"); }
-    catch { return res.status(400).json({ ok:false, error:"Invalid base64" }); }
-    if (!buf.length) return res.status(400).json({ ok:false, error:"Empty file buffer" });
-
-    const ext = String(filename).toLowerCase().split(".").pop();
+    const buf = Buffer.from(fileBase64, "base64");
+    const ext = filename.toLowerCase().split(".").pop();
     let text = "";
 
     if (ext === "pdf") {
       const scanned = detectScanned(buf);
-      if (!scanned) {
-        try { text = await extractPdfText(buf, 20); }
-        catch (e) { return res.status(500).json({ ok:false, error:"PDF text extraction failed: " + e.message }); }
-      } else {
+      if (scanned) {
         if (!process.env.OCR_SPACE_KEY)
           return res.status(400).json({ ok:false, error:"Scanned PDF but OCR_SPACE_KEY not set" });
+        text = await extractWithOCR(fileBase64);
+      } else {
         try {
-          const form = new URLSearchParams();
-          form.append("base64Image", "data:application/pdf;base64," + fileBase64);
-          form.append("language", "eng");
-          const ocr = await fetch("https://api.ocr.space/parse/image", {
-            method: "POST",
-            headers: { apikey: process.env.OCR_SPACE_KEY },
-            body: form
-          }).then(r => r.json());
-          text = (ocr?.ParsedResults || []).map(p => p.ParsedText || "").join("\n");
+          text = await extractWithPdfjs(buf);
+          if (!text.trim() && process.env.OCR_SPACE_KEY) {
+            text = await extractWithOCR(fileBase64);
+          }
         } catch (e) {
-          return res.status(502).json({ ok:false, error:"OCR request failed: " + e.message });
+          if (process.env.OCR_SPACE_KEY) {
+            text = await extractWithOCR(fileBase64);
+          } else {
+            throw e;
+          }
         }
       }
     } else if (ext === "docx") {
       const { default: mammoth } = await import("mammoth");
-      try {
-        const { value } = await mammoth.extractRawText({ buffer: buf });
-        text = value || "";
-      } catch (e) {
-        return res.status(500).json({ ok:false, error:"DOCX parse failed: " + e.message });
-      }
+      text = (await mammoth.extractRawText({ buffer: buf })).value || "";
     } else if (ext === "txt") {
       text = buf.toString("utf8");
     } else {
@@ -114,7 +98,7 @@ export default async function handler(req, res) {
 
     const analysis = {
       title: "BizDoc-Min Analysis",
-      executive_summary: (text || "").trim().slice(0, 800) || "No readable text extracted.",
+      executive_summary: (text || "").slice(0, 800) || "No readable text extracted.",
       metrics: [
         { label: "Net Profit", value: 3808 },
         { label: "Proposed Div", value: 0.52 },
@@ -123,7 +107,6 @@ export default async function handler(req, res) {
         { label: "Revenue Backlog", value: 41344 }
       ]
     };
-
     return res.status(200).json({ ok:true, analysis });
   } catch (err) {
     console.error("UNCAUGHT /api/analyze error:", err);

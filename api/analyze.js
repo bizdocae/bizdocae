@@ -2,129 +2,114 @@ import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import fetch from "node-fetch";
 
-// ---------- Helper: set CORS headers ----------
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-// ---------- Helper: detect scanned PDF ----------
 function detectScanned(buffer) {
   const str = buffer.toString("binary", 0, 2048);
   return /\/Image/i.test(str);
 }
 
-// ---------- Main handler ----------
 export default async function handler(req, res) {
+  cors(res);
+  if (req.method === "OPTIONS") return res.status(204).end();
+
   try {
-    cors(res);
-    if (req.method === "OPTIONS") return res.status(204).end();
+    // ---------- Sanity: check request type ----------
     if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "POST only" });
+      return res.status(405).json({ ok: false, error: "Only POST allowed" });
     }
 
-    // ✅ Parse request body safely
-    let body = {};
+    // ---------- Sanity: read body ----------
+    let body;
     try {
       body = typeof req.body === "object" ? req.body : await req.json();
     } catch (e) {
-      console.error("Body parse failed:", e);
+      console.error("Body parse failed", e);
       return res.status(400).json({ ok: false, error: "Invalid JSON body" });
     }
 
-    const { fileBase64, filename } = body;
+    const { fileBase64, filename } = body || {};
     if (!fileBase64 || !filename) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Missing fileBase64 or filename" });
+      return res.status(400).json({ ok: false, error: "Missing fileBase64 or filename" });
     }
 
-    // Convert base64 → buffer
+    // ---------- Sanity: check buffer ----------
     let buf;
     try {
       buf = Buffer.from(fileBase64, "base64");
+      if (!buf.length) throw new Error("Empty buffer");
     } catch (e) {
-      return res.status(400).json({ ok: false, error: "Invalid Base64" });
+      console.error("Base64 decode failed:", e);
+      return res.status(400).json({ ok: false, error: "Invalid Base64 data" });
     }
 
     const ext = filename.split(".").pop().toLowerCase();
     let text = "";
 
-    // ---------- PDF ----------
+    // ---------- Extract text ----------
     if (ext === "pdf") {
-      const scanned = detectScanned(buf);
-      if (!scanned) {
-        try {
-          const parsed = await pdfParse(buf);
-          text = parsed.text || "";
-        } catch (e) {
-          console.error("PDF parse error:", e);
-          return res
-            .status(500)
-            .json({ ok: false, error: "PDF parsing failed: " + e.message });
+      try {
+        const scanned = detectScanned(buf);
+        if (scanned && !process.env.OCR_SPACE_KEY) {
+          return res.status(400).json({ ok: false, error: "Scanned PDF detected but OCR key not set" });
         }
-      } else if (process.env.OCR_SPACE_KEY) {
-        try {
+        if (scanned) {
           const form = new URLSearchParams();
           form.append("base64Image", "data:application/pdf;base64," + fileBase64);
           form.append("language", "eng");
           const ocr = await fetch("https://api.ocr.space/parse/image", {
             method: "POST",
             headers: { apikey: process.env.OCR_SPACE_KEY },
-            body: form,
-          }).then((r) => r.json());
-          text = (ocr?.ParsedResults || []).map((p) => p.ParsedText).join("\n");
-        } catch (e) {
-          console.error("OCR API error:", e);
-          return res
-            .status(500)
-            .json({ ok: false, error: "OCR request failed: " + e.message });
+            body: form
+          }).then(r => r.json());
+          text = (ocr?.ParsedResults || []).map(p => p.ParsedText).join("\n");
+        } else {
+          const parsed = await pdfParse(buf);
+          text = parsed.text || "";
         }
-      } else {
-        return res.status(400).json({
-          ok: false,
-          error: "Scanned PDF detected but no OCR key configured",
-        });
+      } catch (e) {
+        console.error("PDF parse failed:", e);
+        return res.status(500).json({ ok: false, error: "PDF parse failed: " + e.message });
       }
-
-    // ---------- DOCX ----------
     } else if (ext === "docx") {
       try {
         const { value } = await mammoth.extractRawText({ buffer: buf });
         text = value || "";
       } catch (e) {
-        console.error("DOCX parse error:", e);
-        return res
-          .status(500)
-          .json({ ok: false, error: "DOCX parsing failed: " + e.message });
+        console.error("DOCX parse failed:", e);
+        return res.status(500).json({ ok: false, error: "DOCX parse failed: " + e.message });
       }
-
-    // ---------- TXT ----------
     } else if (ext === "txt") {
       text = buf.toString("utf8");
-
     } else {
       return res.status(400).json({ ok: false, error: "Unsupported file type" });
     }
 
-    // ---------- Build analysis result ----------
+    // ---------- Build response ----------
     const analysis = {
-      title: "BizDoc-Min Analysis Report",
-      executive_summary:
-        text.trim().slice(0, 800) || "No readable text detected.",
+      title: "BizDoc-Min Analysis",
+      executive_summary: text.trim().slice(0, 700) || "No readable text extracted.",
       metrics: [
         { label: "Net Profit", value: 3808 },
         { label: "Proposed Div", value: 0.52 },
         { label: "Total Shareholders", value: 18297 },
         { label: "Property Sales", value: 30713 },
-        { label: "Revenue Backlog", value: 41344 },
-      ],
+        { label: "Revenue Backlog", value: 41344 }
+      ]
     };
 
+    // ---------- Sanity check: summary existence ----------
+    if (!analysis.executive_summary) {
+      console.warn("Sanity check: no summary text returned");
+    }
+
     return res.status(200).json({ ok: true, analysis });
-  } catch (err) {
-    console.error("Unexpected crash:", err);
-    return res.status(500).json({ ok: false, error: "Server crash: " + err.message });
+  } catch (e) {
+    console.error("Unhandled crash:", e);
+    return res.status(500).json({ ok: false, error: "Crash: " + e.message });
   }
 }

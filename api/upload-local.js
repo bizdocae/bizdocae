@@ -8,18 +8,28 @@ function isMultipart(req) {
   return /^multipart\/form-data/i.test(ct);
 }
 
-// Node-safe text extractor using pdf.js legacy build
+// Node-safe text extractor using pdf.js legacy build via CommonJS
+function getPdfJs() {
+  // legacy build ships Node-friendly code
+  const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+  // Avoid workers/eval in Lambda
+  try { pdfjsLib.GlobalWorkerOptions.workerSrc = null; } catch {}
+  return pdfjsLib;
+}
+
 async function extractTextWithPdfJs(buffer) {
-  // dynamic ESM import works fine inside CJS route
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const loadingTask = pdfjs.getDocument({ data: buffer });
+  const pdfjsLib = getPdfJs();
+  const loadingTask = pdfjsLib.getDocument({
+    data: buffer,
+    isEvalSupported: false,
+    disableFontFace: true
+  });
   const doc = await loadingTask.promise;
   let all = '';
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
     const tc = await page.getTextContent();
-    const s = tc.items.map(it => (it && it.str) ? it.str : '').join(' ');
-    all += s + '\n';
+    all += tc.items.map(it => (it && it.str) ? it.str : '').join(' ') + '\n';
     page.cleanup && page.cleanup();
   }
   doc.cleanup && doc.cleanup();
@@ -34,15 +44,11 @@ module.exports = async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return json(res, 405, { ok:false, error:'Use POST' });
+  if (!isMultipart(req)) return json(res, 400, { ok:false, error:"Content-Type must be multipart/form-data; use field 'file'." });
 
-  if (!isMultipart(req)) {
-    return json(res, 400, { ok:false, error:"Content-Type must be multipart/form-data; use field 'file'." });
-  }
-
-  // Load multer only (no pdf-parse)
-  let multer;
-  try { multer = require('multer'); }
-  catch (e) { return json(res, 500, { ok:false, error:'Dependency load failed (multer)', detail:String(e?.message||e) }); }
+  // Multer (CommonJS)
+  let multer; try { multer = require('multer'); }
+  catch (e) { return json(res, 500, { ok:false, error:'multer failed to load', detail:String(e?.message||e) }); }
 
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB
 
@@ -61,7 +67,7 @@ module.exports = async function handler(req, res) {
   if (!file) return json(res, 400, { ok:false, error:"No file uploaded (field must be 'file')." });
   if (file.mimetype !== 'application/pdf') return json(res, 415, { ok:false, error:`Unsupported type: ${file.mimetype}. PDF only.` });
 
-  // Extract text with pdf.js legacy
+  // Extract text using pdf.js (no DOM required)
   let text = '';
   try {
     text = await extractTextWithPdfJs(file.buffer);

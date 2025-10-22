@@ -36,7 +36,7 @@ function detectScanned(buffer) {
   return (head.match(/\/Image/g) || []).length >= 2;
 }
 
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -65,7 +65,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -94,7 +94,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -123,7 +123,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -152,7 +152,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -181,7 +181,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -210,7 +210,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -239,7 +239,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -268,7 +268,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -297,7 +297,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -326,7 +326,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -355,7 +355,7 @@ async function extractWithPdfjs(buffer) {
 
   return text.trim();
 }
-async function extractWithPdfjs(buffer) {
+async function extractPdfSecure(buffer) {
   // Secure pdf.js v5 extraction (no eval)
   const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -431,7 +431,7 @@ export default async function handler(req, res) {
         text = await extractWithOCR(fileBase64);
       } else {
         try {
-          text = await extractWithPdfjs(buf);
+          text = await extractPdfSecure(buf);
           if (!text.trim() && process.env.OCR_SPACE_KEY) {
             text = await extractWithOCR(fileBase64);
           }

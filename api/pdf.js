@@ -79,3 +79,4 @@ module.exports=async (req,res)=>{
     return res.status(500).send(`PDF generation failed:\n${e && e.stack ? e.stack : e}`);
   }
 };
+module.exports.config = { runtime: 'nodejs20.x' };

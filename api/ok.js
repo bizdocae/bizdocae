@@ -1,24 +1,37 @@
-module.exports = (req, res) => {
-  try {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (req.method === 'OPTIONS') return res.status(204).end();
+export const config = { runtime: 'edge' };
 
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(200).end(JSON.stringify({
-      ok: true,
-      service: 'BizDoc-Min API',
-      status: 'Healthy',
-      timestamp: new Date().toISOString(),
-      endpoints: {
-        analyze: '/api/analyze',
-        download: 'client-side-pdf',
-        ok: '/api/ok'
+export default function handler(req) {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET,POST,OPTIONS',
+        'access-control-allow-headers': 'Content-Type, Authorization'
       }
-    }));
-  } catch (err) {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(500).end(JSON.stringify({ ok: false, error: String(err && err.message || err) }));
+    });
   }
-};
+
+  const body = JSON.stringify({
+    ok: true,
+    service: 'BizDoc-Min API',
+    status: 'Healthy',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      analyze: '/api/analyze',
+      download: 'client-side-pdf',
+      ok: '/api/ok'
+    }
+  });
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'public, max-age=0, must-revalidate',
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,POST,OPTIONS',
+      'access-control-allow-headers': 'Content-Type, Authorization'
+    }
+  });
+}

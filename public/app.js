@@ -16,28 +16,21 @@
       setStatus("Analyzing…");
       const f = fileInput?.files?.[0];
 
-      // Build the JSON body in whichever shape the server accepts
-      const name = f?.name || "document.txt";
-      const mime = f?.type || "text/plain";
-      const base64 = f ? await fileToBase64(f) : btoa("Hello BizDoc from UI");
-
-      let body;
-      switch ("A") {
-        case "A":
-          body = { filename: name, mimetype: mime, base64, wantText: true };
-          break;
-        case "B":
-          body = { filename: name, mimetype: mime, text: "Uploaded file (text field used)", wantText: true };
-          break;
-        case "C":
-          body = { filename: name, mimetype: mime, content: "Uploaded file (content field used)", wantText: true };
-          break;
-        case "D":
-          body = { filename: name, mimetype: mime, data: "Uploaded file (data field used)", wantText: true };
-          break;
-        default:
-          body = { text: "Hello BizDoc minimal" };
-      }
+      // Build JSON shape your backend requires:
+      //   filename (string) + fileBase64 (string) [+ mimetype, wantText]
+      const body = f
+        ? {
+            filename: f.name,
+            fileBase64: await fileToBase64(f),
+            mimetype: f.type || "application/octet-stream",
+            wantText: true
+          }
+        : {
+            filename: "hello.txt",
+            fileBase64: btoa("Hello BizDoc (no file selected)"),
+            mimetype: "text/plain",
+            wantText: true
+          };
 
       const res = await fetch("/api/analyze", {
         method: "POST",

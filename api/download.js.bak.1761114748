@@ -1,12 +1,4 @@
-let PDFDocument;
-
-/** Lazy-load pdfkit (works well on Vercel with ESM) */
-async function getPDFDocument() {
-  if (!PDFDocument) {
-    PDFDocument = (await import("pdfkit")).default;
-  }
-  return PDFDocument;
-}
+import PDFDocument from "pdfkit";
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -33,36 +25,33 @@ function drawSectionTitle(doc, text) {
 }
 
 function drawBullets(doc, items = []) {
-  if (!Array.isArray(items) || !items.length) return;
-  doc.fontSize(12);
   for (const line of items) {
-    doc.text(`• ${line}`).moveDown(0.15);
+    doc.circle(doc.x + 2, doc.y + 6, 2).fill("#000").fillColor("#000");
+    doc.text(`   ${line}`).moveDown(0.2);
   }
-  doc.moveDown(0.4);
 }
 
 function drawTable(doc, rows = []) {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    doc.fontSize(12).fillColor("#666").text("—"); return doc.moveDown(0.4);
-  }
+  if (!Array.isArray(rows) || rows.length === 0) return;
   const headers = ["Metric", "Current", "Prior", "YoY"];
-  const widths = [220, 110, 110, 80];
+  const widths = [200, 120, 120, 80];
   const startX = doc.x, startY = doc.y;
 
   doc.fontSize(11).fillColor("#111");
   headers.forEach((h, i) => doc.text(h, startX + widths.slice(0, i).reduce((a, b) => a + b, 0), startY, { width: widths[i], continued: i < headers.length - 1 }));
-  doc.text("");
-  doc.moveDown(0.25).strokeColor("#ccc").moveTo(startX, doc.y).lineTo(startX + widths.reduce((a,b)=>a+b,0), doc.y).stroke();
-  doc.moveDown(0.25).fillColor("#000");
+  doc.text(""); // end continued
 
+  doc.moveDown(0.3).strokeColor("#ccc").moveTo(startX, doc.y).lineTo(startX + widths.reduce((a, b) => a + b, 0), doc.y).stroke();
+
+  doc.moveDown(0.2).fillColor("#000");
   rows.forEach(r => {
-    const y = doc.y;
     const cells = [
       r.label ?? "",
-      r.current ?? r.value ?? "",
+      r.current ?? "",
       r.prior ?? "",
-      typeof r.yoy === "number" || typeof r.yoy === "string" ? String(r.yoy) : (r.yoy ?? "")
+      (typeof r.yoy === "number" || typeof r.yoy === "string") ? String(r.yoy) : (r.yoy ?? "")
     ];
+    const y = doc.y;
     cells.forEach((c, i) => doc.text(String(c), startX + widths.slice(0, i).reduce((a, b) => a + b, 0), y, { width: widths[i], continued: i < cells.length - 1 }));
     doc.text("");
   });
@@ -78,30 +67,33 @@ export default async function handler(req, res) {
     const body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req);
     const analysis = body?.analysis || {};
 
-    // Unify schema: prefer new analysis.sections.*, fallback to legacy fields
+    // ---- Map BOTH schemas to a single view ----
     const title = analysis.title || "Business Analysis";
+
+    // new schema first (analysis.sections.*), fallback to old flat fields
     const sec = analysis.sections || {};
-    const executiveSummary = sec.executive_summary ?? analysis.executive_summary ?? "";
-    const kpiTable = (Array.isArray(sec.kpi_table) ? sec.kpi_table : null) ?? (Array.isArray(analysis.metrics) ? analysis.metrics : []) ?? [];
-    const analysisPoints = Array.isArray(sec.analysis_points) ? sec.analysis_points : [];
+    const executiveSummary =
+      sec.executive_summary ??
+      analysis.executive_summary ??
+      "";
+
+    const kpiTable =
+      (Array.isArray(sec.kpi_table) ? sec.kpi_table : null) ??
+      (Array.isArray(analysis.metrics) ? analysis.metrics : []) ??
+      [];
+
+    const analysisPoints =
+      (Array.isArray(sec.analysis_points) ? sec.analysis_points : null) ??
+      [];
+
     const conclusion = sec.conclusion ?? "";
     const recommendations = sec.recommendations ?? "";
 
-    // Prepare PDF response headers BEFORE piping
+    // ---- Render PDF ----
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="BizDoc_Report.pdf"`);
 
-    const PDFFactory = await getPDFDocument();
-    const doc = new PDFFactory({ size: "A4", margins: { top: 54, bottom: 54, left: 54, right: 54 } });
-
-    doc.on("error", (e) => {
-      try {
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok:false, error: "PDF generation failed: " + (e?.message || e) }));
-      } catch {}
-    });
-
+    const doc = new PDFDocument({ size: "A4", margins: { top: 54, bottom: 54, left: 54, right: 54 } });
     doc.pipe(res);
 
     // Title
@@ -109,14 +101,13 @@ export default async function handler(req, res) {
 
     // Executive Summary
     drawSectionTitle(doc, "Executive Summary");
-    doc.fontSize(12).fillColor("#000").text(executiveSummary || "—");
-    doc.moveDown(0.6);
+    doc.fontSize(12).text(executiveSummary || "—").moveDown(0.6);
 
     // KPI Snapshot
     drawSectionTitle(doc, "KPI Snapshot");
     drawTable(doc, kpiTable);
 
-    // Key Insights
+    // Analysis Points
     if (analysisPoints.length) {
       drawSectionTitle(doc, "Key Insights");
       drawBullets(doc, analysisPoints);

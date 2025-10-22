@@ -32,7 +32,7 @@
 
       const payload = { type: 'txt', filename, body: bodyText };
 
-      const res = await fetch(`${APP}/api/pdf-get`, {
+      const res = await fetch(`${APP}(client-pdf)-get`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

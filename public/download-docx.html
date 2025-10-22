@@ -25,7 +25,7 @@ document.getElementById('go').addEventListener('click', async () => {
   const filename=(document.getElementById('filename').value||'report.docx').trim();
   const title=document.getElementById('title').value||'DOCX Title';
   const body=document.getElementById('body').value||'';
-  const res=await fetch(`${APP}/api/pdf-get`,{
+  const res=await fetch(`${APP}(client-pdf)-get`,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({type:'docx',filename,title,body})

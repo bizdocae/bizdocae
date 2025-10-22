@@ -21,8 +21,6 @@
     try {
       setStatus("Analyzing…");
       const f = fileInput && fileInput.files && fileInput.files[0];
-
-      // 1) Build request for your existing /api/analyze
       const payload = {
         filename: f ? f.name : "document.txt",
         mimetype: f ? (f.type || "application/octet-stream") : "text/plain",
@@ -30,36 +28,46 @@
         wantText: true
       };
 
+      // 1) Run ChatGPT analysis on the server
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
+      if (!res.ok) throw new Error(`Analyze failed: ${res.status} ${await res.text()}`);
 
-      if (!res.ok) {
-        const t = await res.text().catch(()=> "");
-        throw new Error(`Analyze failed: ${res.status} ${t || res.statusText}`);
-      }
+      const data = await res.json();
+      const ai = data?.analysis || {};
 
-      const analysis = await res.json();
+      // 2) Extract rich fields for the PDF
+      const title = ai.title || "BizDoc Analysis";
+      const exec  = ai.executive_summary || ai.summary || "No executive summary.";
+      const kfArr = Array.isArray(ai.key_findings) ? ai.key_findings : [];
+      const bullets = kfArr.slice(0, 10).map(k => ({
+        label: k.label || k.name || "Item",
+        value: k.detail || k.value || ""
+      }));
 
-      // 2) Build a human-readable summary and send to client PDF generator
-      const title = analysis?.analysis?.title || "BizDoc Analysis";
-      const exec = analysis?.analysis?.executive_summary || analysis?.analysis?.summary || "";
-      const bullets = Array.isArray(analysis?.analysis?.key_findings)
-        ? analysis.analysis.key_findings.map(k => ({
-            label: k.label || k.name || "Item",
-            value: k.detail || k.value || ""
-          }))
-        : [];
+      // Optional scores (if present)
+      const fh = ai.financialHealth || {};
+      const scores = [];
+      if (fh.profitabilityScore != null) scores.push({label:"Profitability", value:String(fh.profitabilityScore)});
+      if (fh.liquidityScore != null)     scores.push({label:"Liquidity",     value:String(fh.liquidityScore)});
+      if (fh.concentrationRiskScore!=null) scores.push({label:"Concentration Risk", value:String(fh.concentrationRiskScore)});
 
+      const appendixText = JSON.stringify(ai).slice(0, 4000); // short JSON appendix
+
+      // 3) Build + download the PDF client-side
       await window.generateClientPDF({
         title,
-        text: exec || "Your analysis is ready.",
-        highlights: bullets
+        text: exec,
+        highlights: [...scores, ...bullets],
+        appendixText
       });
 
-      setStatus("✓ Downloaded BizDoc_Report.pdf");
+      // 4) Show a clear confirmation of what went into the PDF
+      setStatus("✓ Downloaded PDF with ChatGPT analysis (title, summary, key findings).");
+      console.log("AI analysis included in PDF:", { title, exec, bulletsCount: bullets.length, scores });
     } catch (e) {
       console.error(e);
       setStatus(`✗ ${e.message}`, true);

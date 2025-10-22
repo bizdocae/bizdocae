@@ -1,94 +1,37 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>BizDoc Analyzer (bizdoc-min)</title>
-<style>
-body { font-family: Inter, sans-serif; max-width: 700px; margin: 40px auto; background:#fafafa; }
-h1 { color:#222; }
-input, button { padding:10px; margin:8px 0; width:100%; font-size:15px; }
-button { background:#0070f3; color:#fff; border:none; cursor:pointer; border-radius:6px; }
-button:hover { background:#0057c2; }
-#out { white-space:pre-wrap; font-size:14px; background:#fff; padding:10px; border-radius:8px; border:1px solid #ccc; }
-.note { font-size:12px; color:#666; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BizDoc Analyzer (bizdoc-min)</title>
+  <style>
+    body { font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    .btn { background:#1061ff; color:#fff; border:0; padding:14px 22px; border-radius:8px; font-weight:600; cursor:pointer; }
+    .box { border:1px solid #ddd; border-radius:8px; padding:16px; margin-top:16px; min-height:88px; }
+    #statusBox { margin-top:8px; }
+  </style>
 </head>
 <body>
   <h1>BizDoc Analyzer (bizdoc-min)</h1>
-  <input type="file" id="file" accept=".pdf,.docx,.txt" />
-  <div class="note">Tip: keep uploads under ~3.5 MB (JSON + base64 adds ~33%).</div>
-  <button id="analyze">Analyze & Download</button>
-  <div id="out"></div>
+  <p>
+    <input type="file" id="file" />
+    <span id="filename"></span>
+  </p>
+  <p><button class="btn" id="analyzeBtn">Analyze &amp; Download</button></p>
+  <div class="box" id="statusBox"></div>
 
-<script>
-const out = document.getElementById("out");
+  <div id="buildStamp" style="opacity:.6;margin-top:20px;font-size:12px;"></div>
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const result = (r.result || "").toString();
-      const base64 = result.split(",")[1] || "";
-      resolve(base64);
-    };
-    r.onerror = () => reject(r.error || new Error("FileReader failed"));
-    r.readAsDataURL(file); // no stack overflow, streams efficiently
-  });
-}
-
-document.getElementById("analyze").onclick = async () => {
-  try {
-    const f = document.getElementById("file").files[0];
-    if (!f) return alert("Select a file first.");
-
-    out.textContent = "Analyzing...";
-    const b64 = await fileToBase64(f);
-
-    const resp = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileBase64: b64, filename: f.name })
+  <!-- libs + client PDF + app -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/@pdf-lib/fontkit@1.2.1/dist/fontkit.umd.js"></script>
+  <script src="/pdf-client.js?v=1761143696"></script>
+  <script src="/app.js?v=1761143696"></script>
+  <script>
+    document.getElementById('file').addEventListener('change', (e) => {
+      document.getElementById('filename').textContent = e.target.files[0]?.name || '';
     });
-
-    // Always read as text first, then try JSON so we can show server messages
-    const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); } catch (_) {
-      throw new Error(`API did not return JSON (status ${resp.status}). Body:\n${text.slice(0,400)}`);
-    }
-    if (!resp.ok || !data.ok) {
-      throw new Error(data?.error || `Analyze failed (status ${resp.status})`);
-    }
-
-    out.textContent = "Generating PDF...";
-    const pdfResp = await fetch("(client-pdf)", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ analysis: data.analysis })
-    });
-
-    if (!pdfResp.ok) {
-      const t = await pdfResp.text();
-      throw new Error(`PDF generation failed (status ${pdfResp.status}). Body:\n${t.slice(0,400)}`);
-    }
-
-    const blob = await pdfResp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "BizDoc_Report.pdf";
-    a.click();
-    URL.revokeObjectURL(url);
-    out.textContent = "✅ Done — PDF downloaded.";
-  } catch (e) {
-    out.textContent = "❌ " + (e?.message || e);
-    console.error(e);
-  }
-};
-</script>
-<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="https://unpkg.com/@pdf-lib/fontkit@1.2.1/dist/fontkit.umd.js"></script>
-<script src="/pdf-client.js?v=1761143430"></script>
-<div style="font:12px system-ui;opacity:.6;text-align:center;margin:24px 0" data-build-version="1761142257">build 1761142257</div>
+    document.getElementById('buildStamp').textContent = 'build ' + Date.now();
+  </script>
 </body>
 </html>

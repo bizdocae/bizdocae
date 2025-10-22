@@ -1,0 +1,142 @@
+let PDFDocument;
+
+/** Lazy-load pdfkit (works well on Vercel with ESM) */
+async function getPDFDocument() {
+  if (!PDFDocument) {
+    PDFDocument = (await import("pdfkit")).default;
+  }
+  return PDFDocument;
+}
+
+function cors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function readJson(req, maxBytes = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let data = "", size = 0;
+    req.on("data", chunk => {
+      size += chunk.length;
+      if (size > maxBytes) { reject(Object.assign(new Error("Request too large"), { status: 413 })); req.destroy(); }
+      else data += chunk;
+    });
+    req.on("end", () => { try { resolve(data ? JSON.parse(data) : {}); } catch { reject(Object.assign(new Error("Invalid JSON body"), { status: 400 })); } });
+    req.on("error", e => reject(Object.assign(e, { status: 400 })));
+  });
+}
+
+function drawSectionTitle(doc, text) {
+  doc.moveDown(1.2).fontSize(14).fillColor("#111").text(text, { underline: true });
+  doc.moveDown(0.4).fillColor("#000");
+}
+
+function drawBullets(doc, items = []) {
+  if (!Array.isArray(items) || !items.length) return;
+  doc.fontSize(12);
+  for (const line of items) {
+    doc.text(`• ${line}`).moveDown(0.15);
+  }
+  doc.moveDown(0.4);
+}
+
+function drawTable(doc, rows = []) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    doc.fontSize(12).fillColor("#666").text("—"); return doc.moveDown(0.4);
+  }
+  const headers = ["Metric", "Current", "Prior", "YoY"];
+  const widths = [220, 110, 110, 80];
+  const startX = doc.x, startY = doc.y;
+
+  doc.fontSize(11).fillColor("#111");
+  headers.forEach((h, i) => doc.text(h, startX + widths.slice(0, i).reduce((a, b) => a + b, 0), startY, { width: widths[i], continued: i < headers.length - 1 }));
+  doc.text("");
+  doc.moveDown(0.25).strokeColor("#ccc").moveTo(startX, doc.y).lineTo(startX + widths.reduce((a,b)=>a+b,0), doc.y).stroke();
+  doc.moveDown(0.25).fillColor("#000");
+
+  rows.forEach(r => {
+    const y = doc.y;
+    const cells = [
+      r.label ?? "",
+      r.current ?? r.value ?? "",
+      r.prior ?? "",
+      typeof r.yoy === "number" || typeof r.yoy === "string" ? String(r.yoy) : (r.yoy ?? "")
+    ];
+    cells.forEach((c, i) => doc.text(String(c), startX + widths.slice(0, i).reduce((a, b) => a + b, 0), y, { width: widths[i], continued: i < cells.length - 1 }));
+    doc.text("");
+  });
+  doc.moveDown(0.6);
+}
+
+export default async function handler(req, res) {
+  try {
+    cors(res);
+    if (req.method === "OPTIONS") return res.status(204).end();
+    if (req.method !== "POST") return res.status(405).json({ ok:false, error:"POST only" });
+
+    const body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req);
+    const analysis = body?.analysis || {};
+
+    // Unify schema: prefer new analysis.sections.*, fallback to legacy fields
+    const title = analysis.title || "Business Analysis";
+    const sec = analysis.sections || {};
+    const executiveSummary = sec.executive_summary ?? analysis.executive_summary ?? "";
+    const kpiTable = (Array.isArray(sec.kpi_table) ? sec.kpi_table : null) ?? (Array.isArray(analysis.metrics) ? analysis.metrics : []) ?? [];
+    const analysisPoints = Array.isArray(sec.analysis_points) ? sec.analysis_points : [];
+    const conclusion = sec.conclusion ?? "";
+    const recommendations = sec.recommendations ?? "";
+
+    // Prepare PDF response headers BEFORE piping
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="BizDoc_Report.pdf"`);
+
+    const PDFFactory = await getPDFDocument();
+    const doc = new PDFFactory({ size: "A4", margins: { top: 54, bottom: 54, left: 54, right: 54 } });
+
+    doc.on("error", (e) => {
+      try {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok:false, error: "PDF generation failed: " + (e?.message || e) }));
+      } catch {}
+    });
+
+    doc.pipe(res);
+
+    // Title
+    doc.fontSize(22).fillColor("#000").text(title).moveDown(1.2);
+
+    // Executive Summary
+    drawSectionTitle(doc, "Executive Summary");
+    doc.fontSize(12).fillColor("#000").text(executiveSummary || "—");
+    doc.moveDown(0.6);
+
+    // KPI Snapshot
+    drawSectionTitle(doc, "KPI Snapshot");
+    drawTable(doc, kpiTable);
+
+    // Key Insights
+    if (analysisPoints.length) {
+      drawSectionTitle(doc, "Key Insights");
+      drawBullets(doc, analysisPoints);
+    }
+
+    // Conclusion
+    if (conclusion) {
+      drawSectionTitle(doc, "Conclusion");
+      doc.fontSize(12).text(conclusion);
+    }
+
+    // Recommendations
+    if (recommendations) {
+      drawSectionTitle(doc, "Recommendations");
+      doc.fontSize(12).text(recommendations);
+    }
+
+    doc.end();
+  } catch (err) {
+    console.error("UNCAUGHT /api/download error:", err);
+    return res.status(500).json({ ok:false, error:"PDF generation failed: " + err.message });
+  }
+}

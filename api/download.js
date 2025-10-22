@@ -1,19 +1,11 @@
-let PDFDocument;
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/** Lazy-load pdfkit (works well on Vercel with ESM) */
-async function getPDFDocument() {
-  if (!PDFDocument) {
-    PDFDocument = (await import("pdfkit")).default;
-  }
-  return PDFDocument;
-}
-
+/* ---------- utils ---------- */
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
-
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let data = "", size = 0;
@@ -27,48 +19,79 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
   });
 }
 
-function drawSectionTitle(doc, text) {
-  doc.moveDown(1.2).fontSize(14).fillColor("#111").text(text, { underline: true });
-  doc.moveDown(0.4).fillColor("#000");
-}
-
-function drawBullets(doc, items = []) {
-  if (!Array.isArray(items) || !items.length) return;
-  doc.fontSize(12);
-  for (const line of items) {
-    doc.text(`• ${line}`).moveDown(0.15);
+/* ---------- simple text layout helpers ---------- */
+function drawWrapped(page, text, opts) {
+  const {
+    x = 54, y = 742, width = 487, font, size = 12, color = rgb(0,0,0), lineHeight = 16
+  } = opts;
+  const words = String(text || "").split(/\s+/);
+  let line = "", cursorY = y;
+  page.setFont(font);
+  page.setFontSize(size);
+  page.setFontColor(color);
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    const tw = font.widthOfTextAtSize(test, size);
+    if (tw > width) {
+      page.drawText(line, { x, y: cursorY });
+      cursorY -= lineHeight;
+      line = w;
+    } else {
+      line = test;
+    }
   }
-  doc.moveDown(0.4);
-}
-
-function drawTable(doc, rows = []) {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    doc.fontSize(12).fillColor("#666").text("—"); return doc.moveDown(0.4);
+  if (line) {
+    page.drawText(line, { x, y: cursorY });
+    cursorY -= lineHeight;
   }
+  return cursorY;
+}
+function sectionTitle(page, text, opts) {
+  const { x=54, y, font, size=14 } = opts;
+  page.setFont(font);
+  page.setFontSize(size);
+  page.setFontColor(rgb(0.07,0.07,0.07));
+  page.drawText(text, { x, y });
+  return y - 20;
+}
+function drawBullets(page, items, opts) {
+  const { x=54, y, font, size=12, width=487, lineHeight=16 } = opts;
+  let cy = y;
+  page.setFont(font); page.setFontSize(size);
+  for (const it of (items || [])) {
+    page.drawText("• ", { x, y: cy });
+    cy = drawWrapped(page, String(it), { x: x+14, y: cy, width, font, size, lineHeight });
+  }
+  return cy;
+}
+function drawTable(page, rows, opts) {
+  const { x=54, y, font, size=12, lineHeight=16 } = opts;
+  let cy = y;
+  const widths = [210, 110, 110, 90]; // Metric, Current, Prior, YoY
   const headers = ["Metric", "Current", "Prior", "YoY"];
-  const widths = [220, 110, 110, 80];
-  const startX = doc.x, startY = doc.y;
+  page.setFont(font); page.setFontSize(size);
 
-  doc.fontSize(11).fillColor("#111");
-  headers.forEach((h, i) => doc.text(h, startX + widths.slice(0, i).reduce((a, b) => a + b, 0), startY, { width: widths[i], continued: i < headers.length - 1 }));
-  doc.text("");
-  doc.moveDown(0.25).strokeColor("#ccc").moveTo(startX, doc.y).lineTo(startX + widths.reduce((a,b)=>a+b,0), doc.y).stroke();
-  doc.moveDown(0.25).fillColor("#000");
+  // headers
+  let cx = x;
+  headers.forEach((h, i) => { page.drawText(h, { x: cx, y: cy }); cx += widths[i]; });
+  cy -= lineHeight * 0.9;
 
-  rows.forEach(r => {
-    const y = doc.y;
+  // rows
+  (rows || []).forEach(r => {
+    let cx2 = x;
     const cells = [
       r.label ?? "",
       r.current ?? r.value ?? "",
       r.prior ?? "",
-      typeof r.yoy === "number" || typeof r.yoy === "string" ? String(r.yoy) : (r.yoy ?? "")
+      (typeof r.yoy === "number" || typeof r.yoy === "string") ? String(r.yoy) : (r.yoy ?? "")
     ];
-    cells.forEach((c, i) => doc.text(String(c), startX + widths.slice(0, i).reduce((a, b) => a + b, 0), y, { width: widths[i], continued: i < cells.length - 1 }));
-    doc.text("");
+    cells.forEach((c, i) => { page.drawText(String(c), { x: cx2, y: cy }); cx2 += widths[i]; });
+    cy -= lineHeight;
   });
-  doc.moveDown(0.6);
+  return cy;
 }
 
+/* ---------- main handler ---------- */
 export default async function handler(req, res) {
   try {
     cors(res);
@@ -78,7 +101,7 @@ export default async function handler(req, res) {
     const body = typeof req.body === "object" && req.body !== null ? req.body : await readJson(req);
     const analysis = body?.analysis || {};
 
-    // Unify schema: prefer new analysis.sections.*, fallback to legacy fields
+    // unify schemas: prefer new sections, fallback to legacy
     const title = analysis.title || "Business Analysis";
     const sec = analysis.sections || {};
     const executiveSummary = sec.executive_summary ?? analysis.executive_summary ?? "";
@@ -87,54 +110,49 @@ export default async function handler(req, res) {
     const conclusion = sec.conclusion ?? "";
     const recommendations = sec.recommendations ?? "";
 
-    // Prepare PDF response headers BEFORE piping
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="BizDoc_Report.pdf"`);
-
-    const PDFFactory = await getPDFDocument();
-    const doc = new PDFFactory({ size: "A4", margins: { top: 54, bottom: 54, left: 54, right: 54 } });
-
-    doc.on("error", (e) => {
-      try {
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok:false, error: "PDF generation failed: " + (e?.message || e) }));
-      } catch {}
-    });
-
-    doc.pipe(res);
+    // build PDF in memory
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([595.28, 841.89]); // A4 points
+    const fontRegular = await pdf.embedFont(StandardFonts.Helvetica);
+    const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
     // Title
-    doc.fontSize(22).fillColor("#000").text(title).moveDown(1.2);
+    page.setFont(fontBold); page.setFontSize(22); page.setFontColor(rgb(0,0,0));
+    page.drawText(title, { x: 54, y: 780 });
 
     // Executive Summary
-    drawSectionTitle(doc, "Executive Summary");
-    doc.fontSize(12).fillColor("#000").text(executiveSummary || "—");
-    doc.moveDown(0.6);
+    let cy = sectionTitle(page, "Executive Summary:", { x:54, y: 748, font: fontBold, size: 14 });
+    cy = drawWrapped(page, executiveSummary || "—", { x:54, y: cy, width:487, font: fontRegular, size: 12, lineHeight: 16 });
 
     // KPI Snapshot
-    drawSectionTitle(doc, "KPI Snapshot");
-    drawTable(doc, kpiTable);
+    cy = sectionTitle(page, "KPI Snapshot:", { x:54, y: cy-6, font: fontBold, size: 14 });
+    cy -= 2;
+    cy = drawTable(page, kpiTable, { x:54, y: cy, font: fontRegular, size: 12, lineHeight: 16 });
 
     // Key Insights
     if (analysisPoints.length) {
-      drawSectionTitle(doc, "Key Insights");
-      drawBullets(doc, analysisPoints);
+      cy = sectionTitle(page, "Key Insights:", { x:54, y: cy-6, font: fontBold, size: 14 });
+      cy = drawBullets(page, analysisPoints, { x:54, y: cy, font: fontRegular, size: 12, width: 487, lineHeight: 16 });
     }
 
     // Conclusion
     if (conclusion) {
-      drawSectionTitle(doc, "Conclusion");
-      doc.fontSize(12).text(conclusion);
+      cy = sectionTitle(page, "Conclusion:", { x:54, y: cy-6, font: fontBold, size: 14 });
+      cy = drawWrapped(page, conclusion, { x:54, y: cy, width:487, font: fontRegular, size: 12, lineHeight: 16 });
     }
 
     // Recommendations
     if (recommendations) {
-      drawSectionTitle(doc, "Recommendations");
-      doc.fontSize(12).text(recommendations);
+      cy = sectionTitle(page, "Recommendations:", { x:54, y: cy-6, font: fontBold, size: 14 });
+      cy = drawWrapped(page, recommendations, { x:54, y: cy, width:487, font: fontRegular, size: 12, lineHeight: 16 });
     }
 
-    doc.end();
+    const bytes = await pdf.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="BizDoc_Report.pdf"');
+    res.setHeader("Content-Length", String(bytes.length));
+    return res.status(200).end(Buffer.from(bytes));
   } catch (err) {
     console.error("UNCAUGHT /api/download error:", err);
     return res.status(500).json({ ok:false, error:"PDF generation failed: " + err.message });

@@ -1,7 +1,7 @@
 /**
  * BizDoc-Min — ChatGPT-only analyzer with secure pdf.js v5 extraction.
  * - PDF text: pdfjs-dist v5 (no eval) + OCR fallback
- * - Analysis: OpenAI (JSON schema) → consumed by /api/download
+ * - Analysis: OpenAI (JSON schema) → consumed by /api/pdf
  */
 
 import OpenAI from "openai";

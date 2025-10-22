@@ -155,7 +155,7 @@ export default async function handler(req, res) {
     }
   } catch (err) {
     // only JSON if we failed before attempting a PDF
-    console.error("UNCAUGHT /api/download error:", err);
+    console.error("UNCAUGHT /api/pdf error:", err);
     return res.status(500).json({ ok:false, error:"PDF generation failed: " + (err?.message || err) });
   }
 }

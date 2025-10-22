@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     timestamp: new Date().toISOString(),
     endpoints: {
       analyze: "/api/analyze",
-      download: "/api/download",
+      download: "/api/pdf",
       ok: "/api/ok"
     }
   };

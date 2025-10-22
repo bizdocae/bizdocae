@@ -58,7 +58,7 @@ downloadBtn?.addEventListener('click', async () => {
   if (!lastPayload) return;
   setBusy(true, 'Building PDF…');
   try {
-    const resp = await fetch('/api/download', {
+    const resp = await fetch('/api/pdf', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(lastPayload)

@@ -6,7 +6,7 @@ function cors(res) {
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
-function readJson(req, maxBytes = 2 * 1024 * 1024) {
+function readJson(req, maxBytes = 4 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let data = "", size = 0;
     req.on("data", chunk => {
@@ -19,102 +19,89 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
   });
 }
 
-/* ---------- layout helpers (with pagination) ---------- */
+/* ---------- pagination + text helpers ---------- */
 function addPage(pdf, fonts) {
   const page = pdf.addPage([595.28, 841.89]); // A4
-  return { page, cy: 780, left: 54, right: 541, fonts };
+  return { page, cy: 780, left: 54, right: 541, fonts, pdf };
 }
-function needSpace(state, lines = 1, lineHeight = 16) {
-  return state.cy - lines * lineHeight < 64;
-}
-function ensureSpace(state, lines, lineHeight = 16) {
-  if (needSpace(state, lines, lineHeight)) {
-    const { pdf, fonts } = state;
-    const np = addPage(pdf, fonts);
-    state.page = np.page; state.cy = np.cy; state.left = np.left; state.right = np.right;
-  }
-}
-function measure(text, font, size) {
-  return font.widthOfTextAtSize(text, size);
-}
+function needSpace(s, lines = 1, lh = 16) { return s.cy - lines * lh < 64; }
+function ensureSpace(s, lines, lh = 16) { if (needSpace(s, lines, lh)) { const np = addPage(s.pdf, s.fonts); Object.assign(s, np); } }
+function measure(text, font, size) { return font.widthOfTextAtSize(text, size); }
 function wrapLines(text, width, font, size) {
-  const words = String(text || "").split(/\s+/);
-  const out = [];
-  let line = "";
-  for (const w of words) {
-    const test = line ? line + " " + w : w;
-    if (measure(test, font, size) > width) { if (line) out.push(line); line = w; }
-    else { line = test; }
-  }
-  if (line) out.push(line);
-  return out;
+  const words = String(text ?? "").split(/\s+/);
+  const out=[]; let line="";
+  for (const w of words) { const t=line?line+" "+w:w; if (measure(t,font,size)>width){ if(line) out.push(line); line=w;} else {line=t;} }
+  if (line) out.push(line); return out;
 }
-function drawParagraph(state, text, { size = 12, color = rgb(0,0,0), lh = 16 } = {}) {
-  const { page, left, right, fonts } = state;
-  const width = right - left;
-  const lines = wrapLines(String(text || "—"), width, fonts.reg, size);
-  ensureSpace(state, lines.length, lh);
-  page.setFont(fonts.reg); page.setFontSize(size); page.setFontColor(color);
-  for (const line of lines) {
-    page.drawText(line, { x: left, y: state.cy });
-    state.cy -= lh;
-  }
-  state.cy -= 4;
+function drawParagraph(s, text, { size=12, color=rgb(0,0,0), lh=16 }={}) {
+  const w = s.right - s.left;
+  const lines = wrapLines(String(text ?? "—"), w, s.fonts.reg, size);
+  ensureSpace(s, lines.length, lh);
+  s.page.setFont(s.fonts.reg); s.page.setFontSize(size); s.page.setFontColor(color);
+  for (const ln of lines) { s.page.drawText(ln, { x:s.left, y:s.cy }); s.cy -= lh; }
+  s.cy -= 4;
 }
-function sectionTitle(state, text, { size = 14 } = {}) {
-  const { page, left, fonts } = state;
-  ensureSpace(state, 2, 18);
-  page.setFont(fonts.bold); page.setFontSize(size); page.setFontColor(rgb(0.1,0.1,0.1));
-  page.drawText(text, { x: left, y: state.cy });
-  state.cy -= 20;
+function sectionTitle(s, text, { size=14 }={}) {
+  ensureSpace(s,2,18);
+  s.page.setFont(s.fonts.bold); s.page.setFontSize(size); s.page.setFontColor(rgb(0.1,0.1,0.1));
+  s.page.drawText(String(text), { x:s.left, y:s.cy }); s.cy -= 20;
 }
-function drawBullets(state, items, { size = 12, lh = 16 } = {}) {
-  const arr = Array.isArray(items) ? items : (typeof items === "string" ? [items] : []);
-  for (const it of arr) {
-    const line = String(it ?? "");
-    const { page, left, right, fonts } = state;
-    const width = right - (left + 14);
-    const lines = wrapLines(line, width, fonts.reg, size);
-    ensureSpace(state, lines.length, lh);
-    page.setFont(fonts.reg); page.setFontSize(size); page.setFontColor(rgb(0,0,0));
-    page.drawText("•", { x: left, y: state.cy });
-    let y = state.cy;
-    for (const l of lines) {
-      page.drawText(l, { x: left + 14, y });
-      y -= lh;
-    }
-    state.cy = y - 2;
+function drawBullets(s, arr, { size=12, lh=16 }={}) {
+  const items = Array.isArray(arr) ? arr : (arr ? [String(arr)] : []);
+  for (const it of items) {
+    const w = s.right - (s.left + 14);
+    const lines = wrapLines(String(it ?? ""), w, s.fonts.reg, size);
+    ensureSpace(s, lines.length, lh);
+    s.page.setFont(s.fonts.reg); s.page.setFontSize(size); s.page.setFontColor(rgb(0,0,0));
+    s.page.drawText("•", { x:s.left, y:s.cy });
+    let y = s.cy;
+    for (const l of lines) { s.page.drawText(l, { x:s.left+14, y }); y -= lh; }
+    s.cy = y - 2;
   }
 }
-function drawTable(state, rows, { size = 12, lh = 16 } = {}) {
+function drawTable(s, rows, { size=12, lh=16 }={}) {
   const list = Array.isArray(rows) ? rows : [];
-  const safeRows = list.map(r => ({
-    label: r?.label ?? "",
-    current: r?.current ?? r?.value ?? "",
-    prior: r?.prior ?? "",
-    yoy: (r?.yoy ?? "") + ""
+  const safe = list.map(r => ({
+    label: r && typeof r === "object" ? (r.label ?? "") : String(r ?? ""),
+    current: r && typeof r === "object" ? (r.current ?? r.value ?? "") : "",
+    prior: r && typeof r === "object" ? (r.prior ?? "") : "",
+    yoy: r && typeof r === "object" ? (r.yoy ?? "") : ""
   }));
 
-  const headers = ["Metric", "Current", "Prior", "YoY"];
-  const widths = [220, 110, 110, 90];
+  const headers = ["Metric","Current","Prior","YoY"];
+  const widths = [220,110,110,90];
 
-  const { page, left, fonts } = state;
-  ensureSpace(state, 2, lh);
-  page.setFont(fonts.bold); page.setFontSize(size);
-  let cx = left;
-  headers.forEach((h,i)=>{ page.drawText(h, { x: cx, y: state.cy }); cx += widths[i]; });
-  state.cy -= lh * 0.9;
+  ensureSpace(s,2,lh);
+  s.page.setFont(s.fonts.bold); s.page.setFontSize(size);
+  let cx = s.left; headers.forEach((h,i)=>{ s.page.drawText(h,{x:cx,y:s.cy}); cx+=widths[i]; });
+  s.cy -= lh*0.9;
 
-  page.setFont(fonts.reg); page.setFontSize(size);
-  for (const r of safeRows) {
-    ensureSpace(state, 1, lh);
-    let cx2 = left;
-    [r.label, r.current, r.prior, r.yoy].forEach((c,i)=>{
-      page.drawText(String(c ?? ""), { x: cx2, y: state.cy }); cx2 += widths[i];
-    });
-    state.cy -= lh;
+  s.page.setFont(s.fonts.reg); s.page.setFontSize(size);
+  for (const r of safe) {
+    ensureSpace(s,1,lh);
+    let cx2 = s.left;
+    [r.label, r.current, r.prior, String(r.yoy ?? "")].forEach((c,i)=>{ s.page.drawText(String(c),{x:cx2,y:s.cy}); cx2+=widths[i]; });
+    s.cy -= lh;
   }
-  state.cy -= 4;
+  s.cy -= 4;
+}
+
+/* ---------- fallback: always return a PDF even on errors ---------- */
+async function errorPdf(message, details) {
+  const pdf = await PDFDocument.create();
+  const reg = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const s = { pdf, fonts:{reg, bold}, ...addPage(pdf, {reg, bold}) };
+
+  s.page.setFont(bold); s.page.setFontSize(18);
+  s.page.drawText("BizDoc Report (Fallback)", { x:s.left, y:s.cy }); s.cy -= 26;
+  sectionTitle(s, "Renderer Error:");
+  drawParagraph(s, String(message || "Unknown error"));
+  sectionTitle(s, "Payload Keys:");
+  const keys = Object.keys(details || {});
+  drawBullets(s, keys.length ? keys : ["<no keys>"]);
+  const bytes = await pdf.save();
+  return Buffer.from(bytes);
 }
 
 /* ---------- main handler ---------- */
@@ -136,46 +123,38 @@ export default async function handler(req, res) {
     const conclusion = sec.conclusion ?? "";
     const recommendations = sec.recommendations ?? "";
 
-    // build pdf
-    const pdf = await PDFDocument.create();
-    const fonts = {
-      reg: await pdf.embedFont(StandardFonts.Helvetica),
-      bold: await pdf.embedFont(StandardFonts.HelveticaBold)
-    };
-    const state = { pdf, fonts, ...addPage(pdf, fonts) };
+    try {
+      // build pdf
+      const pdf = await PDFDocument.create();
+      const fonts = { reg: await pdf.embedFont(StandardFonts.Helvetica), bold: await pdf.embedFont(StandardFonts.HelveticaBold) };
+      const s = { pdf, fonts, ...addPage(pdf, fonts) };
 
-    // Title
-    state.page.setFont(fonts.bold); state.page.setFontSize(22); state.page.setFontColor(rgb(0,0,0));
-    state.page.drawText(title, { x: state.left, y: state.cy }); state.cy -= 28;
+      // Title
+      s.page.setFont(fonts.bold); s.page.setFontSize(22); s.page.setFontColor(rgb(0,0,0));
+      s.page.drawText(title, { x:s.left, y:s.cy }); s.cy -= 28;
 
-    // Sections
-    sectionTitle(state, "Executive Summary:");
-    drawParagraph(state, executiveSummary);
+      // Sections
+      sectionTitle(s, "Executive Summary:"); drawParagraph(s, executiveSummary);
+      sectionTitle(s, "KPI Snapshot:");      drawTable(s, kpiTable);
+      if ((analysisPoints || []).length) { sectionTitle(s, "Key Insights:"); drawBullets(s, analysisPoints); }
+      if (conclusion) { sectionTitle(s, "Conclusion:"); drawParagraph(s, conclusion); }
+      if (recommendations) { sectionTitle(s, "Recommendations:"); drawParagraph(s, recommendations); }
 
-    sectionTitle(state, "KPI Snapshot:");
-    drawTable(state, kpiTable);
-
-    if ((analysisPoints || []).length) {
-      sectionTitle(state, "Key Insights:");
-      drawBullets(state, analysisPoints);
+      const bytes = await pdf.save();
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", 'attachment; filename="BizDoc_Report.pdf"');
+      res.setHeader("Content-Length", String(bytes.length));
+      return res.status(200).end(Buffer.from(bytes));
+    } catch (inner) {
+      // fallback PDF (never returns JSON on error)
+      const buf = await errorPdf(inner?.message || inner, analysis);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", 'attachment; filename="BizDoc_Report.pdf"');
+      res.setHeader("Content-Length", String(buf.length));
+      return res.status(200).end(buf);
     }
-
-    if (conclusion) {
-      sectionTitle(state, "Conclusion:");
-      drawParagraph(state, conclusion);
-    }
-
-    if (recommendations) {
-      sectionTitle(state, "Recommendations:");
-      drawParagraph(state, recommendations);
-    }
-
-    const bytes = await pdf.save();
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", 'attachment; filename="BizDoc_Report.pdf"');
-    res.setHeader("Content-Length", String(bytes.length));
-    return res.status(200).end(Buffer.from(bytes));
   } catch (err) {
+    // only JSON if we failed before attempting a PDF
     console.error("UNCAUGHT /api/download error:", err);
     return res.status(500).json({ ok:false, error:"PDF generation failed: " + (err?.message || err) });
   }

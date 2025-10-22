@@ -61,7 +61,7 @@ document.getElementById("analyze").onclick = async () => {
     }
 
     out.textContent = "Generating PDF...";
-    const pdfResp = await fetch("/api/pdf", {
+    const pdfResp = await fetch("(client-pdf)", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ analysis: data.analysis })

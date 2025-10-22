@@ -24,6 +24,6 @@
   },
   "type": "module",
   "devDependencies": {
-    "vercel": "^41.0.2"
+    "vercel": "^32.0.1"
   }
 }

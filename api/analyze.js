@@ -37,17 +37,353 @@ function detectScanned(buffer) {
 }
 
 async function extractWithPdfjs(buffer) {
-  // Lazy import (prevents module-load crashes on GET)
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  const pdf = await pdfjs.getDocument({ data: uint8 }).promise;
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
   let text = "";
-  for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
     const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    text += content.items.map(it => it.str || "").join(" ") + "\n";
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
   }
+
   return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
+async function extractWithPdfjs(buffer) {
+  // Secure pdf.js v5 extraction (no eval)
+  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    isOffscreenCanvasSupported: false,
+  });
+
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 20);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent({
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    if (content?.items?.length) {
+      text += content.items.map((it) => it.str || "").join(" ") + "\n";
+    }
+  }
+
+  return text.trim();
+}
 }
 
 async function extractWithOCR(fileBase64) {

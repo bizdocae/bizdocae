@@ -31,6 +31,10 @@
     "gauge": "^5.0.2",
     "are-we-there-yet": "^4.0.2",
     "inflight": "^1.0.6",
-    "path-match": "npm:regexparam@2.0.1"
+    "path-match": "npm:regexparam@2.0.1",
+    "pdfjs-dist": "5.4.296",
+    "path-to-regexp": "^6.3.0",
+    "undici": "^6.19.8",
+    "esbuild": "^0.24.3"
   }
 }

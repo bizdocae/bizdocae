@@ -14,7 +14,7 @@
     "multiparty": "^4.2.3",
     "openai": "^4.104.0",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^3.11.174",
+    "pdfjs-dist": "5.4.296",
     "zod": "^3.25.76"
   },
   "engines": {
@@ -23,17 +23,5 @@
   "type": "module",
   "devDependencies": {
     "vercel": "^48.4.1"
-  },
-  "overrides": {
-    "glob": "^10.3.10",
-    "rimraf": "^5.0.5",
-    "npmlog": "^7.0.1",
-    "gauge": "^5.0.2",
-    "are-we-there-yet": "^4.0.2",
-    "inflight": "^1.0.6",
-    "path-match": "npm:regexparam@2.0.1",
-    "path-to-regexp": "^6.3.0",
-    "undici": "^6.19.8",
-    "esbuild": "^0.24.3"
   }
 }

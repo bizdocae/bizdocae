@@ -4,7 +4,8 @@
   "scripts": {
     "build": "echo \"no build step\"",
     "vercel-build": "npm run build",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "vercel dev"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",

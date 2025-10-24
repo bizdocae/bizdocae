@@ -2,7 +2,7 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 async function generateClientPDF(payload) {
   const { PDFDocument, rgb } = window.PDFLib;
   const fontBytes = await fetch("/fonts/NotoSans-Regular.ttf").then(r=>r.arrayBuffer());
-  const pdf = await PDFDocument.create(); pdf;
+  const pdf = await PDFDocument.create(); pdf.registerFontkit(window.fontkit);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const { title="BizDoc Analysis", text="", highlights=[], appendixText="" } = payload||{};
   const A4=[595.28,841.89], m=56; const page=pdf.addPage(A4); const {width,height}=page.getSize();

@@ -1,3 +1,7 @@
 node_modules
-.DS_Store
 .vercel
+.env*
+*.bak.*
+*.log
+dist
+.DS_Store

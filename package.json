@@ -2,8 +2,8 @@
   "name": "bizdocae",
   "private": true,
   "scripts": {
-    "build": "echo no build needed",
-    "vercel-build": "echo no build on vercel",
+    "build": "echo \"no build step\"",
+    "vercel-build": "npm run build",
     "start": "node server.js"
   },
   "dependencies": {

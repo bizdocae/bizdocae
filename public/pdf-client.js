@@ -24,7 +24,6 @@ async function generateClientPDF(payload) {
 window.generateClientPDF = generateClientPDF;
 
 // __bizdoc_embedfont_shim__: always use StandardFonts.Helvetica in browser
-import { PDFDocument, StandardFonts } from "pdf-lib";
 (() => {
   try {
     const __orig = PDFDocument.prototype.embedFont;

@@ -1,39 +1,37 @@
 import { cors, isOptions } from "./_utils/cors.js";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
 
-async function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = [];
-    req.on("data", c => data.push(c));
-    req.on("end", () => resolve(Buffer.concat(data).toString("utf8")));
-    req.on("error", reject);
-  });
-}
-
-async function handler(req, res) {
+export default async function handler(req, res) {
   cors(res);
   if (isOptions(req)) return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ ok:false, error:"Use POST" });
 
   try {
-    const raw = await readBody(req);
-    const body = JSON.parse(raw || "{}");
-    const a = body.analysis || body;
+    // Parse JSON body
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    const analysis = body.analysis || body;
 
-    const pdf = await PDFDocument.create();
-    const page = pdf.addPage([595,842]);
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    page.drawText(a.title || "BizDocAE Report", { x:60, y:780, size:18, font });
-    page.drawText("Auto-generated: " + new Date().toISOString(), { x:60, y:760, size:10, font });
-    page.drawText("Sentiment: " + ((a.text?.sentiment?.label) || "unknown"), { x:60, y:740, size:10, font });
-    page.drawText("Mean: " + (a.numbers?.stats?.mean || "-"), { x:60, y:720, size:10, font });
-    const bytes = await pdf.save();
+    // Create and configure PDF
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);           // ✅ register fontkit
+    const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    res.setHeader("Content-Type","application/pdf");
-    res.setHeader("Content-Disposition",'attachment; filename="BizDocAE_Report.pdf"');
+    const page = pdfDoc.addPage([595, 842]);
+    page.drawText(analysis.title || "BizDocAE Report", {
+      x: 60, y: 780, size: 18, font: helv, color: rgb(0, 0, 0)
+    });
+    page.drawText("Generated at: " + new Date().toISOString(), {
+      x: 60, y: 760, size: 10, font: helv
+    });
+
+    const bytes = await pdfDoc.save();
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="BizDocAE_Report.pdf"');
     res.status(200).send(Buffer.from(bytes));
-  } catch(e) {
+  } catch (e) {
     res.status(500).json({ ok:false, error:String(e) });
   }
 }
-export default handler;

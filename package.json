@@ -1,9 +1,10 @@
 {
-  "name": "bizdoc-min",
+  "name": "bizdocae",
   "private": true,
   "scripts": {
-    "build": "echo 'no build needed'",
-    "vercel-build": "echo 'no build on vercel'"
+    "build": "echo no build needed",
+    "vercel-build": "echo no build on vercel",
+    "start": "node server.js"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
@@ -11,6 +12,7 @@
     "busboy": "^1.6.0",
     "docx": "^8.5.0",
     "formidable": "^3.5.4",
+    "jszip": "^3.10.1",
     "mammoth": "^1.6.0",
     "multer": "^2.0.2",
     "multiparty": "^4.2.3",
@@ -21,10 +23,11 @@
     "zod": "^3.25.76"
   },
   "engines": {
-    "node": ">=20 <21"
+    "node": ">=22 <23"
   },
   "type": "module",
   "devDependencies": {
     "vercel": "^32.0.1"
-  }
+  },
+  "version": "0.1.0"
 }

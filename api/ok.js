@@ -1,37 +1,19 @@
-export const config = { runtime: 'edge' };
+import { cors, isOptions } from "./_utils/cors.js";
 
-export default function handler(req) {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'access-control-allow-origin': '*',
-        'access-control-allow-methods': 'GET,POST,OPTIONS',
-        'access-control-allow-headers': 'Content-Type, Authorization'
-      }
-    });
-  }
+export default async function handler(req, res) {
+  cors(res);
+  if (isOptions(req)) return res.status(204).end();
 
-  const body = JSON.stringify({
+  res.status(200).json({
     ok: true,
-    service: 'BizDoc-Min API',
-    status: 'Healthy',
+    service: "BizDocAE API",
+    status: "Healthy",
     timestamp: new Date().toISOString(),
     endpoints: {
-      analyze: '/api/analyze',
-      download: 'client-side-pdf',
-      ok: '/api/ok'
-    }
-  });
-
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'public, max-age=0, must-revalidate',
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'Content-Type, Authorization'
+      analyze: "/api/analyze",
+      download: "client-side-pdf",
+      ok: "/api/ok",
+      version: "/api/version"
     }
   });
 }

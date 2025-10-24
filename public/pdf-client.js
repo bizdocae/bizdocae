@@ -1,27 +1,15 @@
-import fontkit from "fontkit";
-/**
- * BizDocAE client helper — no imports, no fontkit, no pdf-lib in browser.
- * Uses the server /api/report to generate the PDF, then triggers a download.
- */
-(function () {
-  async function downloadReport(analysis) {
-    const resp = await fetch('/api/report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ analysis })
-    });
-    if (!resp.ok) throw new Error('Report generation failed');
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = (analysis && analysis.title ? analysis.title : 'BizDocAE_Report') + '.pdf';
-    document.body.appendChild(a);
-    a.click();
-    URL.revokeObjectURL(url);
-    a.remove();
-  }
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-  window.bizdoc = window.bizdoc || {};
-  window.bizdoc.downloadReport = downloadReport;
-})();
+export async function generateClientPDF(data = {}) {
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([600, 800]);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  const { title = "BizDoc Report", summary = "No content" } = data;
+
+  page.drawText(title, { x: 50, y: 750, size: 20, font, color: rgb(0, 0, 0) });
+  page.drawText(summary, { x: 50, y: 710, size: 12, font, color: rgb(0, 0, 0) });
+
+  const pdfBytes = await pdfDoc.save();
+  return pdfBytes;
+}

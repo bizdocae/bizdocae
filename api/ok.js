@@ -13,7 +13,9 @@ export default async function handler(req, res) {
       analyze: "/api/analyze",
       download: "client-side-pdf",
       ok: "/api/ok",
-      version: "/api/version"
+      version: "/api/version",
+      pdf: "/api/pdf",
+      docx: "/api/docx"
     }
   });
 }

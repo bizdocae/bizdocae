@@ -1,34 +1,26 @@
-import { PDFDocument, StandardFonts } from "pdf-lib";
-async function generateClientPDF(payload) {
-  const { PDFDocument, rgb } = window.PDFLib;
-  const fontBytes = await fetch("/fonts/NotoSans-Regular.ttf").then(r=>r.arrayBuffer());
-  const pdf = await PDFDocument.create(); pdf;
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const { title="BizDoc Analysis", text="", highlights=[], appendixText="" } = payload||{};
-  const A4=[595.28,841.89], m=56; const page=pdf.addPage(A4); const { width, height }=page.getSize();
-  const norm = s => String(s||"").replace(/\r\n/g,"\n");
-  page.drawText(norm(title),{ x:m, y:height-m-20, size:22, font, color:rgb(0, 0, 0) });
-  let y=height-m-60; for(const h of (highlights||[]).slice(0,15)){ page.drawText(`• ${h.label }: ${h.value}`,{x:m,y,size:11,font,color:rgb(0,0,0)}); y-=18; }
-  const wrap=(t,sz,x,y0,maxW)=>{const w=String(t||"").split(/\s+/); let l="", y=y0, lh=sz*1.5;
-    for(const W of w){ const c=l?l+" "+W:W; if(font.widthOfTextAtSize(c, sz)>maxW){ if(l) page.drawText(l, {x, y, size:sz, font, color:rgb(0, 0, 0) }); y-=lh; l=W;} else l=c;}
-    if(l) page.drawText(l,{ x, y, size:sz, font, color:rgb(0, 0, 0) });};
-  wrap(norm(text),11,m,y-10,width-m*2);
-  if(appendixText){ const p2=pdf.addPage(A4); p2.drawText("Appendix: AI JSON (truncated)", {x:m, y:p2.getSize().height-m-20, size:14, font, color:rgb(0, 0, 0) });
-    const W=String(appendixText).split(/\s+/); let l="", y2=p2.getSize().height-m-60, lh=15; for(const w of W){const c=l?l+" "+w:w;
-      if(font.widthOfTextAtSize(c,10)>(p2.getSize().width-m*2)){ if(l) p2.drawText(l, {x:m, y:y2, size:10, font, color:rgb(0, 0, 0) }); y2-=lh; l=w; if(y2<80) break;} else l=c;}
-    if(l && y2>=80) p2.drawText(l,{ x:m, y:y2, size:10, font, color:rgb(0, 0, 0) }); }
-  const bytes = await pdf.save(); const blob = new Blob([bytes],{ type:"application/pdf" });
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="BizDoc_Report.pdf"; document.body.appendChild(a);
-  a.click(); URL.revokeObjectURL(a.href); a.remove();
-}
-window.generateClientPDF = generateClientPDF;
+/**
+ * BizDocAE client helper — no imports, no fontkit, no pdf-lib in browser.
+ * Uses the server /api/report to generate the PDF, then triggers a download.
+ */
+(function () {
+  async function downloadReport(analysis) {
+    const resp = await fetch('/api/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analysis })
+    });
+    if (!resp.ok) throw new Error('Report generation failed');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (analysis && analysis.title ? analysis.title : 'BizDocAE_Report') + '.pdf';
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(url);
+    a.remove();
+  }
 
-// __bizdoc_embedfont_shim__: always use StandardFonts.Helvetica in browser
-(() => {
-  try {
-    const __orig = PDFDocument.prototype.embedFont;
-    PDFDocument.prototype.embedFont = function(..._args) {
-      return __orig.call(this, StandardFonts.Helvetica);
-    };
-  } catch {  }
+  window.bizdoc = window.bizdoc || {};
+  window.bizdoc.downloadReport = downloadReport;
 })();

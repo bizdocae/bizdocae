@@ -1,3 +1,4 @@
+import fontkit from "fontkit";
 /**
  * BizDocAE client helper — no imports, no fontkit, no pdf-lib in browser.
  * Uses the server /api/report to generate the PDF, then triggers a download.

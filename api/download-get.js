@@ -44,7 +44,7 @@ async function asDocx(res, text, filename = "BizDoc_Report.docx") {
 
   zip.folder("_rels").file(".rels",
     `<?xml version="1.0" encoding="UTF-8"?>
-     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+     <Relationships xmlns="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
        <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
      </Relationships>`.replace(/\n\s+/g,"")
   );

@@ -1,4 +1,4 @@
-import {     PDFDocument, StandardFonts    } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 (async function () {
   const btn = document.getElementById("analyzeBtn");
   const fileInput = document.getElementById("file");
@@ -55,7 +55,6 @@ import {     PDFDocument, StandardFonts    } from "pdf-lib";
 })();
 
 // __bizdoc_embedfont_shim__: always use StandardFonts.Helvetica in browser
-import {    PDFDocument, StandardFonts    } from "pdf-lib";
 (() => {
   try {
     const __orig = PDFDocument.prototype.embedFont;

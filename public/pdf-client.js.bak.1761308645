@@ -1,4 +1,4 @@
-import {  PDFDocument, StandardFonts , StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 async function generateClientPDF(payload) {
   const { PDFDocument, rgb } = window.PDFLib;
   const fontBytes = await fetch("/fonts/NotoSans-Regular.ttf").then(r=>r.arrayBuffer());
@@ -22,14 +22,3 @@ async function generateClientPDF(payload) {
   a.click(); URL.revokeObjectURL(a.href); a.remove();
 }
 window.generateClientPDF = generateClientPDF;
-
-// __bizdoc_embedfont_shim__: always use StandardFonts.Helvetica in browser
-import { PDFDocument, StandardFonts } from "pdf-lib";
-(() => {
-  try {
-    const __orig = PDFDocument.prototype.embedFont;
-    PDFDocument.prototype.embedFont = function(..._args) {
-      return __orig.call(this, StandardFonts.Helvetica);
-    };
-  } catch {}
-})();

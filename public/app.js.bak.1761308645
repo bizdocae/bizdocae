@@ -1,4 +1,4 @@
-import {  PDFDocument, StandardFonts , StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 (async function () {
   const btn = document.getElementById("analyzeBtn");
   const fileInput = document.getElementById("file");
@@ -52,15 +52,4 @@ import {  PDFDocument, StandardFonts , StandardFonts } from "pdf-lib";
       console.error(e); setStatus(`✗ ${e.message}`, true);
     }
   };
-})();
-
-// __bizdoc_embedfont_shim__: always use StandardFonts.Helvetica in browser
-import { PDFDocument, StandardFonts } from "pdf-lib";
-(() => {
-  try {
-    const __orig = PDFDocument.prototype.embedFont;
-    PDFDocument.prototype.embedFont = function(..._args) {
-      return __orig.call(this, StandardFonts.Helvetica);
-    };
-  } catch {}
 })();

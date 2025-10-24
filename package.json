@@ -11,6 +11,7 @@
     "@vercel/blob": "^2.0.0",
     "busboy": "^1.6.0",
     "docx": "^8.5.0",
+    "fontkit": "^2.0.4",
     "formidable": "^3.5.4",
     "jszip": "^3.10.1",
     "mammoth": "^1.6.0",
@@ -23,7 +24,7 @@
     "zod": "^3.25.76"
   },
   "engines": {
-    "node": ">=20 <23"
+    "node": "20.x"
   },
   "type": "module",
   "devDependencies": {
